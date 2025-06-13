@@ -502,20 +502,31 @@ class InformationBottleneck_VIB(nn.Module):
         else:
             return x * z_scale 
 
+    # def kl_closed_form(self, x):
+    #     new_shape = self.adapt_shape(self.post_z_mu.size(), x.size())
+    #     h_D = torch.exp(self.post_z_logD.view(new_shape))
+    #     h_mu = self.post_z_mu.view(new_shape)
+
+    #     KLD = torch.sum(torch.log(1 + h_mu.pow(2)/(h_D + self.epsilon) )) * x.size(2) / h_D.size(2)
+
+    #     if x.dim() > 2:
+    #         if self.divide_w:
+    #             # divide it by the width
+    #             KLD *= x.size()[2]
+    #         else:
+    #             KLD *= np.prod(x.size()[2:])
+    #     return KLD * 0.5 * self.kl_mult
     def kl_closed_form(self, x):
-        new_shape = self.adapt_shape(self.post_z_mu.size(), x.size())
-        h_D = torch.exp(self.post_z_logD.view(new_shape))
-        h_mu = self.post_z_mu.view(new_shape)
-
-        KLD = torch.sum(torch.log(1 + h_mu.pow(2)/(h_D + self.epsilon) )) * x.size(2) / h_D.size(2)
-
-        if x.dim() > 2:
-            if self.divide_w:
-                # divide it by the width
-                KLD *= x.size()[2]
-            else:
-                KLD *= np.prod(x.size()[2:])
-        return KLD * 0.5 * self.kl_mult
+        # 使用模型的变分参数，而非输入x的统计特性
+        mu = self.post_z_mu
+        logvar = self.post_z_logD
+        
+        # 计算标准KL散度
+        kl_div = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        
+        # 根据需要应用缩放因子
+        return kl_div * self.kl_mult
+    
 
 class SL_module_VIB(nn.Module):
     def __init__(self, input_dim, depth, heads, mlp_dim, dropout_ratio):
