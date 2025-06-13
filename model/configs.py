@@ -19,11 +19,11 @@ def str2bool(v):
 class Config(object):
     def __init__(self, **kwargs):
         """Configuration Class: set kwargs as class attributes with setattr"""
-        if torch.cuda.is_available():
-            self.device = torch.device("cuda:0")
+        """if torch.cuda.is_available():
+            self.device = torch.device("cuda:0") #gpu choose
         else:
             self.device = torch.device("cpu")
-        print ("Device being used:", self.device)
+        print ("Device being used:", self.device)"""
 
 
         for k, v in kwargs.items():
@@ -39,8 +39,14 @@ class Config(object):
     def set_dataset_dir(self):
         """ Function that sets as class attributes the necessary directories for logging important training information.
         """
-
-        self.save_dir_root = f'Summaries/{self.model}/{self.tag}'
+        cate=self.tag
+        cate=cate.split('_')[0]
+        #self.save_dir_root = f'Summaries/{self.model}/New/new_{cate}/{self.tag}'
+        #self.save_dir_root = f'Summaries/IB/{self.model}/{cate}/{self.tag}'
+        try:
+            self.save_dir_root = f'Summaries/IB/{self.model}/{self.modal}/{self.type}/{cate}/{self.beta}/{self.tag}'
+        except:
+            self.save_dir_root = f'Summaries/IB/{self.model}/{self.modal}/{self.type}/{cate}/vbeta_{self.vbeta}/abeta_{self.abeta}/mbeta_{self.mbeta}/{self.tag}'
         save_dir = os.path.join(self.save_dir_root, 'models')
         os.makedirs(save_dir, exist_ok = True)
 
@@ -52,6 +58,24 @@ class Config(object):
 
         self.best_map15_save_dir = os.path.join(self.save_dir_root, 'best_mAP15_model')
         os.makedirs(self.best_map15_save_dir, exist_ok = True)
+
+        self.best_pre_save_dir = os.path.join(self.save_dir_root, 'best_pre_model')
+        os.makedirs(self.best_pre_save_dir, exist_ok = True)
+
+        self.best_map_save_dir = os.path.join(self.save_dir_root, 'best_map_model')
+        os.makedirs(self.best_map_save_dir, exist_ok = True)
+
+        """self.f1score_save_dir = os.path.join(self.save_dir_root, 'f1score_model')
+        os.makedirs(self.f1score_save_dir, exist_ok = True)
+
+        self.map50_save_dir = os.path.join(self.save_dir_root, 'mAP50_model')
+        os.makedirs(self.map50_save_dir, exist_ok = True)
+
+        self.map15_save_dir = os.path.join(self.save_dir_root, 'mAP15_model')
+        os.makedirs(self.map15_save_dir, exist_ok = True)
+
+        self.pre_save_dir = os.path.join(self.save_dir_root, 'pre_model')
+        os.makedirs(self.pre_save_dir, exist_ok = True)"""
 
         log_dir = os.path.join(self.save_dir_root, 'logs')
         os.makedirs(log_dir, exist_ok = True)

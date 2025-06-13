@@ -31,3 +31,43 @@ def top15_summary(scores):
         selected_segs[index] = 1
     
     return selected_segs
+
+def top20_summary(scores):
+    sort_idx = torch.argsort(scores, descending=True)
+
+    # take the 20% shots
+    filter_index = int(len(scores) * 0.20) 
+    filtered_sort_idx = sort_idx[:filter_index]
+    selected_segs = [0] * len(scores)
+    for index in filtered_sort_idx:
+        selected_segs[index] = 1
+    
+    return selected_segs
+
+def top_n_summary(scores,percent):
+    sort_idx = torch.argsort(scores, descending=True)
+
+    filter_index = int(len(scores) * percent) 
+    filtered_sort_idx = sort_idx[:filter_index]
+    selected_segs = [0] * len(scores)
+    for index in filtered_sort_idx:
+        selected_segs[index] = 1
+    
+    return selected_segs
+
+def top_summary(scores):
+    sort_idx = torch.argsort(scores, descending=True)
+
+    # take the 15% shots
+    filter_index = int(len(scores)) 
+    filtered_sort_idx = sort_idx[:filter_index]
+    selected_segs = [0] * len(scores)
+    for index in filtered_sort_idx:
+        selected_segs[index] = 1
+    
+    return selected_segs
+    
+def hit_1(scores):
+    
+    return hit_score
+    
