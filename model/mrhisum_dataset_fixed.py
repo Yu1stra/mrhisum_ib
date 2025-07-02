@@ -51,14 +51,15 @@ class MrHiSumDataset(Dataset):
                 d['gtscore'] = torch.Tensor(np.array(video_data[video_name + '/gtscore'])).detach()
                 d['audio'] = audio_features
                 d['multi'] = concat_features.detach()
-                
+                cps = np.array(video_data[video_name + '/change_points'])
+                d['change_points'] = cps
                 # Additional data for validation and test modes
                 if self.mode != 'train':
                     n_frames = d['multi'].shape[0]
-                    cps = np.array(video_data[video_name + '/change_points'])
+                    #cps = np.array(video_data[video_name + '/change_points'])
                     d['n_frames'] = np.array(n_frames)
                     d['picks'] = np.array([i for i in range(n_frames)])
-                    d['change_points'] = cps
+                    #d['change_points'] = cps
                     d['n_frame_per_seg'] = np.array([cp[1]-cp[0] for cp in cps])
                     d['gt_summary'] = np.expand_dims(np.array(video_data[video_name + '/gt_summary']), axis=0)
             
@@ -73,7 +74,7 @@ class MrHiSumDataset(Dataset):
 # The original BatchCollator with improved error handling
 class BatchCollator(object):
     def __call__(self, batch):
-        video_name, features, gtscore, audio, multi = [], [], [], [], []
+        video_name, features, gtscore, audio, multi, cps = [], [], [], [], [], []
         
         try:
             for data in batch:
@@ -82,6 +83,7 @@ class BatchCollator(object):
                 gtscore.append(data['gtscore'])
                 audio.append(data['audio'])
                 multi.append(data['multi'])
+                cps.append(data['change_points'])
         except Exception as e:
             import traceback
             print('Error in batch collator:', str(e))
@@ -113,7 +115,8 @@ class BatchCollator(object):
             'gtscore': gtscore, 
             'mask': mask_visual,
             'mask_audio': mask_audio, 
-            'mask_multi': mask_multi
+            'mask_multi': mask_multi,
+            'change_points': cps  # Keep as original list of NumPy arrays
         }
         
         return batch_data

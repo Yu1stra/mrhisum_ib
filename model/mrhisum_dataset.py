@@ -28,7 +28,8 @@ class MrHiSumDataset(Dataset):
         #self.split_file = 'dataset/Travel_metadata_split.json' 
         #self.split_file = 'dataset/Autos & Vehicles_metadata_split.json' 
         #self.split_file = 'dataset/sport_metadata_split.json' 
-        
+        self.features_data = h5py.File(self.feature_file_path, 'r')
+        self.video_data = h5py.File(self.dataset_path, 'r')
         # Don't open the HDF5 files in __init__, as they won't be properly shared across processes
         # Instead, we'll open them in __getitem__ when needed
         

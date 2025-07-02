@@ -15,7 +15,6 @@ from networks.graph_fusion import graph_fusion
 from model.utils.evaluation_metrics import evaluate_summary
 from model.utils.generate_summary import generate_summary
 from model.utils.evaluate_map import generate_mrhisum_seg_scores, top50_summary, top15_summary
-from model.utils.clip_level_processing import process_clip_level_features, process_clip_level_scores, map_clip_scores_to_frames
 from networks.atfuse.ATFuse import FactorAtt_ConvRelPosEnc, MHCABlock, UpScale 
 from networks.CrossAttentional.cam import CAM
 from networks.sl_module.BottleneckTransformer import BottleneckTransformer
@@ -40,6 +39,79 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True)
+
+def process_clip_level_data(visual_features, gtscore, audio_features, change_points, mask):
+    """
+    根据change_points处理片段级别的特征和分数
+    
+    :param visual_features: 视觉特征张量 [batch_size, seq_len, feature_dim]
+    :param gtscore: 真实分数张量 [batch_size, seq_len]
+    :param audio_features: 音频特征张量 [batch_size, seq_len, audio_dim]
+    :param change_points: 变化点列表，每个元素为[start, end]
+    :return: 字典，包含片段级别的视觉特征、音频特征和分数
+    """
+    batch_size = visual_features.size(0)
+    clip_level_results = []
+    
+
+    visual_feat = visual_features
+    gt_score = gtscore
+    audio_feat = audio_features
+    mask=mask
+    # 如果change_points是一个列表的列表（批次数据），取对应批次的数据
+    cps = change_points
+    
+    n_clips = len(cps)
+    clip_visual_features = []
+    clip_audio_features = []
+    clip_scores = []
+    clip_mask_list=[]
+    # 处理每个片段
+    #print(cps)
+    for clip_idx in range(n_clips):
+        start, end = cps[clip_idx]
+        
+        # 确保indices不超出范围
+        if start >= visual_feat.size(0) or end > visual_feat.size(0):
+            continue
+            
+        # 提取当前片段的特征
+        clip_visual = visual_feat[start:end]
+        clip_audio = audio_feat[start:end]
+        clip_gt = gt_score[start:end]
+        clip_mask = mask[start:end]
+        # 计算片段特征平均值
+        # clip_visual_avg = torch.mean(clip_visual, dim=0)
+        # clip_audio_avg = torch.mean(clip_audio, dim=0)
+        
+        # 计算片段分数平均值
+        clip_score_avg = torch.mean(clip_gt)
+        
+        # 添加到结果列表
+        clip_visual_features.append(clip_visual)
+        clip_audio_features.append(clip_audio)
+        clip_scores.append(clip_score_avg)
+        clip_mask_list.append(clip_mask)
+       
+    # 保存当前批次的结果
+    clip_level_results.append({
+        'clip_visual': clip_visual_features,
+        'clip_audio': clip_audio_features,
+        'clip_score': clip_scores,
+        'clip_mask': clip_mask_list
+    })
+    
+    return clip_visual_features ,clip_audio_features ,clip_scores ,clip_mask_list
+
 set_seed(42)
 
 class Solver(object):
@@ -53,7 +125,6 @@ class Solver(object):
         self.test_loader = test_loader
         self.modal = modal
         self.global_step = 0
-        self.use_clips = True  # 启用片段级处理
 
         self.criterion = nn.MSELoss(reduction='none').to(self.device)
     
@@ -66,9 +137,41 @@ class Solver(object):
         elif self.config.type=='ib':
             self.model = SL_module_VIB(input_dim=1024, depth=5, heads=8, mlp_dim=3072, dropout_ratio=0.5)
         self.model.to(cuda_device)
-        self.optimizer = optim.SGD(self.model.parameters(), lr=self.config.lr, momentum=0.9, weight_decay=self.config.l2_reg)
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.1)
-    
+        # self.optimizer = optim.SGD(self.model.parameters(), lr=self.config.lr, momentum=0.9, weight_decay=self.config.l2_reg)
+        # self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.1)
+        # 修改优化器设置，分离变分参数和其他参数
+        ib_params = []
+        other_params = []
+        
+        # 检查模型中的所有参数
+        for name, param in self.model.named_parameters():
+            if 'post_z_mu' in name or 'post_z_logD' in name:
+                print(f"VIB parameter detected: {name}")
+                ib_params.append(param)
+            else:
+                other_params.append(param)
+        
+        # 为变分参数使用更小的学习率（原始学习率的1/10）
+        ib_lr = self.config.lr 
+        print(f"使用学习率: 一般参数 {self.config.lr}, VIB参数 {ib_lr}")
+        
+        self.optimizer = optim.SGD([
+            {'params': ib_params, 'lr': ib_lr, 'weight_decay': self.config.l2_reg },  # 变分参数
+            {'params': other_params, 'lr': self.config.lr, 'weight_decay': self.config.l2_reg}  # 其他参数
+        ], momentum=0.9)
+        # self.optimizer = optim.Adam([
+        #     {'params': ib_params, 'lr': ib_lr, 'weight_decay': self.config.l2_reg},  # 变分参数
+        #     {'params': other_params, 'lr': self.config.lr, 'weight_decay': self.config.l2_reg}  # 其他参数
+        # ], betas=(0.9, 0.999), eps=1e-8)
+        
+        #self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.1)
+        # 使用ReduceLROnPlateau调度器根据验证损失自动调整学习率
+        # 当验证损失在patience个epoch没有改善时，将学习率乘以factor
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, mode='min', factor=0.1, patience=10,
+            verbose=True, threshold=0.0001, threshold_mode='rel',
+            cooldown=0, min_lr=1e-6, eps=1e-08
+        )
     def train(self):
         path50=[]
         path100=[]
@@ -104,57 +207,119 @@ class Solver(object):
             num_batches = int(len(self.train_loader))
             iterator = iter(self.train_loader)
 
-            for _ in tqdm(range(num_batches)):
+            for batch_idx in tqdm(range(num_batches)):
+                print(f"處理批次 {batch_idx}/{num_batches}")
                 
                 self.optimizer.zero_grad()
-                time.sleep(0.2)
-                data = next(iterator)
+                # 移除延遲，以便更快看到結果
+                # time.sleep(0.2)
+                try:
+                    data = next(iterator)
+                    print("成功獲取數據批次")
+                except Exception as e:
+                    print(f"獲取數據時出錯: {e}")
                 #'video_name' : video_name, 'features' : frame_feat_visual, 'audio':frame_feat_audio, 'gtscore':gtscore, 'mask':mask_visual, 'mask_audio':mask_audio
                 visual = data['features'].to(cuda_device)
                 gtscore = data['gtscore'].to(cuda_device)
                 audio = data['audio'].to(cuda_device)
                 mask = data['mask'].to(cuda_device)
-                
-                # 如果是训练阶段且使用片段级处理，转换为片段级特征和分数
-                if self.use_clips and 'change_points' in data:
-                    # 获取场景变换点
-                    cps = data['change_points'][0].to(cuda_device)
-                    # 转换为片段级特征和分数
-                    clip_visual = process_clip_level_features(visual, cps)
-                    clip_gtscore = process_clip_level_scores(gtscore, cps)
-                    # 生成新的掩码 (所有片段特征都是有效的)
-                    clip_mask = torch.ones(clip_visual.shape[0], dtype=torch.bool, device=cuda_device)
-                    
-                    # 替换为片段级数据
-                    visual = clip_visual
-                    gtscore = clip_gtscore
-                    mask = clip_mask
-                
-                #一般---------------------------
-                if self.config.type=="base":
-                    score, weights = model(visual, mask)
-                    loss = self.criterion(score[mask], gtscore[mask]).mean()
-                    loss.backward()
-                    loss_history.append(loss.detach().item())
-                #IB+KL-----------------------------------------------------
-                # **调用 SL_module**
-                #print(input_feature)
-                elif self.config.type=="ib":
-                    score,  kl_loss = model(visual, mask)
-                    # **计算预测损失**
-                    prediction_loss = self.criterion(score[mask], gtscore[mask]).mean()
-                    # **计算 IB 重建损失**
-                    #reconstruction_loss = nn.MSELoss()(input_feature[input_mask], x_reconstructed[input_mask])
-                    #reconstruction_loss = nn.L1Loss()(input_feature[input_mask], x_reconstructed[input_mask])
-                    # **计算 KL 散度损失**
-                    # **最终损失**
-                    beta = self.config.beta  # KL 损失的权重系数
-                    total_loss = prediction_loss  + beta * kl_loss
-                    #total_loss = prediction_loss + reconstruction_loss + beta * kl_loss
-                    total_loss.backward()
-                    kl_loss_history.append(kl_loss.detach().item())
-                    loss_history.append(total_loss.detach().item())
+                change_points=data['change_points'][0]
+                # 使用實際批次大小而非配置值，避免索引越界
+                print(f"視覺特徵形狀: {visual.shape}")
+                actual_batch_size = visual.shape[0]
+                print(f"實際批次大小: {actual_batch_size}")
+                for b in range(actual_batch_size):
+                    print(f"處理批次內的樣本 {b}")
+                    try:
+                        clip_visual, clip_audio, clip_gtscore, clip_mask=process_clip_level_data(visual[b], gtscore[b], audio[b], change_points, mask[b])
+                        print(f"片段數量: {len(clip_visual)}")
+                        for i in range(len(clip_visual)):
+                        #一般---------------------------
+                            if self.config.type=="base":
+                                score, weights = model(clip_visual[i], clip_mask[i])
+                                loss = self.criterion(score[clip_mask[i]], clip_gtscore[clip_mask[i]]).mean()
+                                loss.backward()
+                                loss_history.append(loss.detach().item())
+                                self.optimizer.step()
+                            #IB+KL-----------------------------------------------------
+                            # **调用 SL_module**
+                            #print(input_feature)
+                            elif self.config.type=="ib":
+                                visual_input=clip_visual[i].unsqueeze(0)
+                                mask_input=clip_mask[i].unsqueeze(0)
+                                #print(mask_input)
+                                score, kl_loss = model(visual_input, mask_input)
+                                
+                                # 计算预测损失 (主任务损失)
+                                # 正确计算方式：使用布尔掩码
+                                mask_bool = mask_input.squeeze(0).bool()  # 变成 [10] 的布尔张量
+                                score_flat = score.squeeze(0)  # 变成 [10]
+                                
+                                # 确保目标损失的维度与输入相同
+                                # 注意：clip_gtscore[i]需要扩展为与score_flat[mask_bool]相同维度
+                                selected_scores = score_flat[mask_bool]  # 选取的预测分数
+                                
+                                #print(mask_bool)
+                                
+                                if mask_bool.any():  # 确保掩码中有True值
+                                    # 正确取得对应的真实分数
+                                    gtscore_i = clip_gtscore[i]  # 当前片段的真实分数
+                                    
+                                    # 如果gtscore_i是标量，则扩展为与selected_scores相同大小
+                                    if not hasattr(gtscore_i, 'shape') or gtscore_i.shape == torch.Size([]):
+                                        target_scores = gtscore_i.expand_as(selected_scores)
+                                    else:
+                                        # 否则，选择对应的真实分数位置
+                                        target_scores = gtscore_i[mask_bool]
+                                    
+                                    # 计算损失
+                                    prediction_loss = self.criterion(selected_scores, target_scores).mean()
+                                    #print(f"預測損失計算完成: {prediction_loss.item()}")
+                                else:
+                                    # 如果掩码全为False，则损失为0
+                                    # 使用score的一個元素乘以0來保持標量時也有梯度跟蹤
+                                    prediction_loss = score.mean() * 0.0
+                                
+                                # 确保KL损失有合理的值（避免inf/nan但不裁剪范围）
+                                if torch.isnan(kl_loss) or torch.isinf(kl_loss):
+                                    print(f"WARNING: KL loss is {kl_loss.item() if hasattr(kl_loss, 'item') else kl_loss}, replacing with 0")
+                                    kl_loss = torch.tensor(0.0, device=score.device)
+                                
+                                # 分开考虑KL损失和预测损失（类似VIBNet）
+                                beta = self.config.beta  # KL 损失的权重系数
+                                
+                                # 确保记录正确的损失值（即使条件为0）
+                                if beta > 0:
+                                    total_loss = prediction_loss + beta * kl_loss
+                                else:
+                                    total_loss = prediction_loss
+                                    
+                                # 计算梯度并更新
+                                self.optimizer.zero_grad()
+                                #print(f"\n開始反向傳播，損失值: {total_loss.item()}")
+                                try:
+                                    total_loss.backward()
+                                    #print("反向傳播成功")
+                                except Exception as e:
+                                    print(f"反向傳播時出錯: {e}")
+                                
+                                # 记录损失
+                                pred_loss_val = prediction_loss.detach().item()
+                                kl_loss_val = kl_loss.detach().item()
+                                loss_v_history.append(pred_loss_val)
+                                kl_loss_history.append(kl_loss_val)
+                                loss_history.append(total_loss.detach().item())
+                                
+                                # 如果KL损失组件为0或很小，打印警告
+                                if kl_loss_val < 1e-8 and beta > 0:
+                                    print(f"WARNING: KL loss is nearly zero: {kl_loss_val}")
+                                
+                                # 更新模型参数
+                                self.optimizer.step()
+                    except Exception as e:
+                        print(f"處理樣本時出錯: {e}")
                 #time.sleep(1.5)
+            # 每個訓練週期結束時的處理
             if not loss_history==[]:
                 loss = np.mean(np.array(loss_history))
             else:
@@ -210,19 +375,32 @@ class Solver(object):
                 best_f1score = val_f1score
                 best_f1score_epoch = epoch_i
                 f1_save_ckpt_path = os.path.join(self.config.best_f1score_save_dir, f'best_f1.pkl')
+                if os.path.exists(f1_save_ckpt_path):
+                    os.remove(f1_save_ckpt_path)
                 torch.save(state_dict, f1_save_ckpt_path)
+                if f1_save_ckpt_path not in path:
+                    path.append(f1_save_ckpt_path)
 
             if best_map50 <= val_map50:
                 best_map50 = val_map50
                 best_map50_epoch = epoch_i
                 map50_save_ckpt_path = os.path.join(self.config.best_map50_save_dir, f'best_map50.pkl')
+                if os.path.exists(map50_save_ckpt_path):
+                    os.remove(map50_save_ckpt_path)
                 torch.save(state_dict, map50_save_ckpt_path)
+                if map50_save_ckpt_path not in path:
+                    path.append(map50_save_ckpt_path)
             
             if best_map15 <= val_map15:
                 best_map15 = val_map15
                 best_map15_epoch = epoch_i
                 map15_save_ckpt_path = os.path.join(self.config.best_map15_save_dir, f'best_map15.pkl')
+                if os.path.exists(map15_save_ckpt_path):
+                    os.remove(map15_save_ckpt_path)
                 torch.save(state_dict, map15_save_ckpt_path)
+                if map15_save_ckpt_path not in path:
+                    path.append(map15_save_ckpt_path)
+
             if best_map <= val_map:
                 best_map = val_map
                 best_map_epoch = epoch_i
@@ -232,7 +410,11 @@ class Solver(object):
                 torch.save(state_dict, best_map_ckpt_path)
                 if best_map_ckpt_path not in path:
                     path.append(best_map_ckpt_path)
-                    
+            
+            # 调用学习率调度器，传入验证损失作为监控指标
+            # 当验证损失不再下降时，ReduceLROnPlateau会自动降低学习率
+            self.scheduler.step(val_loss)
+
             #print("   [Epoch {0}] Train loss: {1:.05f}".format(epoch_i+1, loss))
             #print('    VAL  F-score {0:0.5} | MAP50 {1:0.5} | MAP15 {2:0.5}'.format(val_f1score, val_map50, val_map15))
             print(f'[Proportion {str(proportion * 100)}% | Epoch {str(epoch_i+1)}], \n'
@@ -292,24 +474,6 @@ class Solver(object):
             audio = data['audio'].to(cuda_device)
             input_mask = 'mask'
             #multi_feature = data['multi'].to(cuda_device)
-            
-            # 获取场景变换点和视频信息，用于片段级处理
-            cps = data['change_points'][0]
-            n_frames = data['n_frames'][0].item()
-            
-            # 转换为片段级特征和分数
-            if self.use_clips:
-                clip_visual = process_clip_level_features(visual, cps)
-                clip_gtscore = process_clip_level_scores(gtscore, cps)
-                # 生成新的掩码 (所有片段特征都是有效的)
-                clip_mask = torch.ones(clip_visual.shape[0], dtype=torch.bool, device=cuda_device)
-                
-                # 替换为片段级数据处理
-                frame_visual = visual  # 保存原始帧级特征以供后续使用
-                visual = clip_visual
-                frame_gtscore = gtscore  # 保存原始帧级分数
-                gtscore = clip_gtscore
-                
             #一般-------------------------------------
             if self.config.type=="base":
                 input_feature = visual
@@ -323,12 +487,7 @@ class Solver(object):
                 B = input_feature.shape[0]
                 mask=None
                 if input_mask in data:
-                    # 使用片段级处理时使用生成的clip_mask
-                    if self.use_clips:
-                        mask = clip_mask
-                    else:
-                        mask = data[input_mask].to(cuda_device)
-                        
+                    mask = data[input_mask].to(cuda_device)
                 with torch.no_grad():
                     score, weights = model(input_feature, mask)
                 #print(f"multi, score, gtscore, mask_multi={multi_feature.shape, score.shape, gtscore.shape, mask_multi.shape}")
@@ -352,29 +511,39 @@ class Solver(object):
                 B = input_feature.shape[0]
                 mask=None
                 if input_mask in data:
-                    # 使用片段级处理时使用生成的clip_mask
-                    if self.use_clips:
-                        mask = clip_mask
-                    else:
-                        mask = data[input_mask].to(cuda_device)
-                        
+                    mask = data[input_mask].to(cuda_device)
                 with torch.no_grad():
-                    score,  kl_loss = model(input_feature, mask)
-                # **计算预测损失**
-                prediction_loss = self.criterion(score[mask], gtscore[mask]).mean()
-            
-                # **计算 IB 重建损失**
-                #reconstruction_loss = nn.MSELoss()(input_feature[input_mask], x_reconstructed[input_mask])
-                #reconstruction_loss = nn.L1Loss()(input_feature[input_mask], x_reconstructed[input_mask])
-                # **计算 KL 散度损失**
-                # **最终损失**
-                beta = self.config.beta  # KL 损失的权重系数
-                total_loss = prediction_loss  + beta * kl_loss
-                #total_loss = prediction_loss + reconstruction_loss + beta * kl_loss
-                torch.cuda.synchronize() 
-                #total_loss.backward()
-                loss_history.append(total_loss.detach().cpu().item())
-                kl_loss_history.append(kl_loss.detach().cpu().item())
+                    score, kl_loss = model(input_feature, mask)
+                    
+                    # 计算预测损失
+                    prediction_loss = self.criterion(score[mask], gtscore[mask]).mean()
+                    
+                    # 处理可能的异常KL损失值
+                    if torch.isnan(kl_loss) or torch.isinf(kl_loss):
+                        print(f"WARNING in evaluation: KL loss is {kl_loss.item() if hasattr(kl_loss, 'item') else kl_loss}, replacing with 0")
+                        kl_loss = torch.tensor(0.0, device=score.device)
+                    
+                    # 分开考虑KL损失和预测损失
+                    beta = self.config.beta  # KL损失权重系数
+                    
+                    # 计算总损失
+                    if beta > 0:
+                        total_loss = prediction_loss + beta * kl_loss
+                    else:
+                        total_loss = prediction_loss
+                    
+                    torch.cuda.synchronize()
+                    
+                    # 记录损失值
+                    pred_loss_val = prediction_loss.detach().cpu().item()
+                    kl_loss_val = kl_loss.detach().cpu().item()
+                    
+                    loss_history.append(total_loss.detach().cpu().item())
+                    kl_loss_history.append(kl_loss_val)
+                    
+                    # 检测KL损失是否接近零
+                    if kl_loss_val < 1e-8 and beta > 0:
+                        print(f"WARNING in evaluation: KL loss is nearly zero: {kl_loss_val}")
                 #self.optimizer.step()
 
             loss = np.mean(np.array(loss_history))
@@ -386,22 +555,14 @@ class Solver(object):
             precision = true_positives / (predicted_positives + 1e-7)  # Avoid division by zero
             precision_history.append(precision)
         
-            # 处理片段级分数
+            # Summarization metric
             score = score.squeeze().cpu()
-            
-            # 如果使用了片段级预测，需要将片段级预测映射回帧级
-            if self.use_clips:
-                # 将片段级分数映射回帧级分数，用于最终评估
-                score = map_clip_scores_to_frames(score, cps, n_frames)
-            
-            # 获取评估所需的数据
             gt_summary = data['gt_summary'][0]
             cps = data['change_points'][0]
             n_frames = data['n_frames']
             nfps = data['n_frame_per_seg'][0].tolist()
             picks = data['picks'][0].numpy()
-            
-            # 生成机器摘要
+            #print("score",len(score), "cps",len(cps), "nframe",len(n_frames), "nfps",len(nfps), "picks",len(picks))
             machine_summary = generate_summary(score, cps, n_frames, nfps, picks)
             #print("MACHINE", machine_summary, machine_summary.shape)
             #print("GT SUMMARY",gt_summary, gt_summary.shape)
@@ -413,12 +574,7 @@ class Solver(object):
             fscore_history.append(f_score)
 
             # Highlight Detection Metric
-            # 使用原始帧级标签进行评估 (如果使用了片段级处理)
-            if self.use_clips:
-                gt_seg_score = generate_mrhisum_seg_scores(frame_gtscore.squeeze(0), uniform_clip=5)
-            else:
-                gt_seg_score = generate_mrhisum_seg_scores(gtscore.squeeze(0), uniform_clip=5)
-                
+            gt_seg_score = generate_mrhisum_seg_scores(gtscore.squeeze(0), uniform_clip=5)
             gt_top50_summary = top50_summary(gt_seg_score)
             gt_top15_summary = top15_summary(gt_seg_score)
             
@@ -531,19 +687,18 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type = str, default = 'SL_module', help = 'the name of the model')
     parser.add_argument('--epochs', type = int, default = 2, help = 'the number of training epochs')
-    parser.add_argument('--lr', type = float, default = 5e-2, help = 'the learning rate')
-    parser.add_argument('--l2_reg', type = float, default = 1e-4, help = 'l2 regularizer')
+    parser.add_argument('--lr', type = float, default = 5e-3, help = 'the learning rate')
+    parser.add_argument('--l2_reg', type = float, default = 5e-5, help = 'l2 regularizer')
     parser.add_argument('--dropout_ratio', type = float, default = 0.5, help = 'the dropout ratio')
     parser.add_argument('--batch_size', type = int, default = 128, help = 'the batch size')
-    parser.add_argument('--tag', type = str, default = 'visual_VIB_clip', help = 'A tag for experiments')
+    parser.add_argument('--tag', type = str, default = 'visual_VIB', help = 'A tag for experiments')
     parser.add_argument('--ckpt_path', type = str, default = None, help = 'checkpoint path for inference or weight initialization')
     parser.add_argument('--train', type=str2bool, default='true', help='when use Train')
     parser.add_argument('--path', type=str, default='dataset/mr_hisum_split.json', help='path')
-    parser.add_argument('--device', type=str, default='0', help='gpu')
+    parser.add_argument('--device', type=str, default='1', help='gpu')
     parser.add_argument('--modal', type=str, default='visual', help='visual,audio,multi')
     parser.add_argument('--beta', type=float, default=0, help='beta')
     parser.add_argument('--type',type = str, default='ib', help='base,ib,cib,eib,lib')#cib,eib,lib
-    parser.add_argument('--use_clips', type=str2bool, default='true', help='使用片段级处理替代帧级处理')
 
     opt = parser.parse_args()
     # print(type(opt))
@@ -563,8 +718,6 @@ if __name__ == '__main__':
     device = torch.device("cuda:"+config.device)
     print ("Device being used:", device)
     solver = Solver(config, train_loader, val_loader, test_loader, device, config.modal)
-    # 设置是否使用片段级处理
-    solver.use_clips = config.use_clips
 
     solver.build()
     test_model_ckpt_path = None

@@ -38,13 +38,28 @@ def generate_summary(ypred, cps, n_frames, nfps, positions, proportion=0.15, met
         scores = frame_scores[start:end]
         seg_score.append(float(scores.mean()))
 
+    # 计算摘要长度限制（总帧数的一定比例）
     limits = int(math.floor(n_frames * proportion))
-
-    # print("limits", limits)
-    # print("nfps", nfps)
-    # print("seg_score", seg_score)
-    # print("len(nfps)", len(nfps))
-    picks = knapSack(limits, nfps, seg_score, len(nfps))
+    
+    # 添加防御性检查，预防knapSack错误
+    if len(nfps) == 0 or len(seg_score) == 0:
+        # print("Warning: Empty nfps or seg_score, returning empty picks.")
+        picks = []
+    elif len(nfps) != len(seg_score):
+        # print(f"Warning: Length mismatch between nfps ({len(nfps)}) and seg_score ({len(seg_score)}), truncating to shorter.")
+        min_len = min(len(nfps), len(seg_score))
+        picks = knapSack(limits, nfps[:min_len], seg_score[:min_len], min_len)
+    elif limits <= 0:
+        # print(f"Warning: Invalid limits value ({limits}), returning empty picks.")
+        picks = []
+    else:
+        # 输出debug信息
+        # print("Debug knapSack inputs:")
+        # print(f"- limits: {limits}")
+        # print(f"- nfps length: {len(nfps)}, values: {nfps[:5]}{'...' if len(nfps) > 5 else ''}")
+        # print(f"- seg_score length: {len(seg_score)}, values: {seg_score[:5]}{'...' if len(seg_score) > 5 else ''}")
+        # 正常调用knapSack
+        picks = knapSack(limits, nfps, seg_score, len(nfps))
 
     summary = np.zeros((1), dtype=np.float32) # this element should be deleted
     for seg_idx in range(n_segs):

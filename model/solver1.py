@@ -10,7 +10,7 @@ import time
 from networks.mlp import SimpleMLP
 from networks.pgl_sum.pgl_sum import PGL_SUM
 from networks.vasnet.vasnet import VASNet
-from networks.sl_module.sl_module_test import *
+from networks.sl_module.sl_module import *
 from networks.graph_fusion import graph_fusion
 from model.utils.evaluation_metrics import evaluate_summary
 from model.utils.generate_summary import generate_summary

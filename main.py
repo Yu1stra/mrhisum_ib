@@ -4,8 +4,8 @@ import argparse
 import gc
 from model.configs import Config, str2bool
 from torch.utils.data import DataLoader
-from model.mrhisum_dataset import MrHiSumDataset, BatchCollator
-from model.solver import Solver
+from model.mrhisum_dataset_fixed import MrHiSumDataset, BatchCollator
+from model.solver1 import Solver
 import random
 import numpy as np
 
@@ -40,31 +40,31 @@ if __name__ == '__main__':
     g.manual_seed(42)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type=str, default='MLP',
+    parser.add_argument('--model', type=str, default='SL_module',
                         help='the name of the model')
-    parser.add_argument('--epochs', type=int, default=200,
+    parser.add_argument('--epochs', type=int, default=2,
                         help='the number of training epochs')
-    parser.add_argument('--lr', type=float, default=5e-5,
+    parser.add_argument('--lr', type=float, default=0.05,
                         help='the learning rate')
     parser.add_argument('--l2_reg', type=float,
                         default=1e-4, help='l2 regularizer')
     parser.add_argument('--dropout_ratio', type=float,
                         default=0.5, help='the dropout ratio')
     parser.add_argument('--batch_size', type=int,
-                        default=256, help='the batch size')
-    parser.add_argument('--tag', type=str, default='dev',
+                        default=64, help='the batch size')
+    parser.add_argument('--tag', type=str, default='testcib',
                         help='A tag for experiments')
     parser.add_argument('--ckpt_path', type=str, default=None,
                         help='checkpoint path for inference or weight initialization')
     parser.add_argument('--train', type=str2bool,
                         default='true', help='when use Train')
     parser.add_argument('--path', type=str,
-                        default='dataset/metadata_split.json', help='path')
+                        default="dataset/mr_hisum_split.json", help='path')
     parser.add_argument('--device', type=str, default='0', help='gpu')
     parser.add_argument('--modal', type=str,
-                        default='visual', help='visual,audio,multi')
-    parser.add_argument('--beta', type=float, default=0, help='beta')
-    parser.add_argument('--type', type=str, default='base',
+                        default='multi', help='visual,audio,multi')
+    parser.add_argument('--beta', type=float, default=0.001, help='beta')
+    parser.add_argument('--type', type=str, default='cib',
                         help='base,ib,cib,eib,lib')  # cib,eib,lib
 
     opt = parser.parse_args()

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-time_tag="05261332"
+time_tag="06220248"
 type="dycmib"
 modal="multi"
 #1e-06
@@ -78,29 +78,25 @@ path="dataset/mr_hisum_split.json"
 batch_size=64
 echo "Running for ${type}, epochs: ${i} on GPU 0 only"
 
-# for value in "${beta_list[@]}"
-# do
-#     for path in "${datasets[@]}"
-#     do
-#         # 從 JSON 文件名提取 cate 類別
-#         cate=$(basename "${path}" | sed -E 's/_split\.json$//;s/[ &()]/_/g')
-        
-#         echo "Processing dataset: ${path} (Category: ${cate})"
-#         python main_dy_cmib.py --train True  --batch_size 64 --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta ${value} --abeta ${value} --mbeta ${value} --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_${value} --path ${path}
-#         python main_dy_cmib.py --train True  --batch_size 64 --device 1 --modal ${modal} --lr 0.05 --type ${type} --vbeta ${value} --abeta ${value} --mbeta ${value} --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_${value} --path ${path}
-#         python main_dy_cmib.py --train True  --batch_size 64 --device 2 --modal ${modal} --lr 0.05 --type ${type} --vbeta ${value} --abeta ${value} --mbeta ${value} --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_${value} --path ${path}
-#         python main_dy_cmib.py --train True  --batch_size 32 --device 3 --modal ${modal} --lr 0.05 --type ${type} --vbeta ${value} --abeta ${value} --mbeta ${value} --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_${value} --path ${path}
-#     done
-# done
+for value in "${beta_list[@]}"
+do
+    # 從 JSON 文件名提取 cate 類別
+    cate=$(basename "${path}" | sed -E 's/_split\.json$//;s/[ &()]/_/g')
+    
+    echo "Processing dataset: ${path} (Category: ${cate})"
+    python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 1 --modal ${modal} --lr 0.05 --type ${type} --vbeta ${value} --abeta ${value} --mbeta ${value} --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_${value} --path ${path}
+
+done
 #python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 1 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.0008 --abeta 0.0008 --mbeta 0.0008 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.0008 --path ${path} 
 #python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 1 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.0004 --abeta 0.0004 --mbeta 0.0004 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.0004 --path ${path}
 #python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 1 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.00009 --abeta 0.00009 --mbeta 0.00009 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.00009 --path ${path}
 #python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.00005 --abeta 0.00005 --mbeta 0.00005 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.00005 --path ${path}
 #python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.00001 --abeta 0.00001 --mbeta 0.00001 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.00001 --path ${path}
-python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.0003 --abeta 0.0003 --mbeta 0.0003 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.0003 --path ${path}
-python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.00008 --abeta 0.00008 --mbeta 0.00008 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.00008 --path ${path}
-python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.00004 --abeta 0.00004 --mbeta 0.00004 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.00004 --path ${path}
-python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.0002 --abeta 0.0002 --mbeta 0.0002 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.0002 --path ${path}
-python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.00007 --abeta 0.00007 --mbeta 0.00007 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.00007 --path ${path}
-python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.00003 --abeta 0.00003 --mbeta 0.00003 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.00003 --path ${path}
+# python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.0003 --abeta 0.0003 --mbeta 0.0003 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.0003 --path ${path}
+# python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.00008 --abeta 0.00008 --mbeta 0.00008 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.00008 --path ${path}
+# python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.00004 --abeta 0.00004 --mbeta 0.00004 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.00004 --path ${path}
+# python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.0002 --abeta 0.0002 --mbeta 0.0002 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.0002 --path ${path}
+# python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.00007 --abeta 0.00007 --mbeta 0.00007 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.00007 --path ${path}
+# python main_dy_cmib_backup.py --train True  --batch_size ${batch_size} --device 0 --modal ${modal} --lr 0.05 --type ${type} --vbeta 0.00003 --abeta 0.00003 --mbeta 0.00003 --epochs ${i} --tag ${cate}_${type}_ep${i}_${time_tag}_samebeta_0.00003 --path ${path}
 echo "所有指令執行完畢。"
+# python main_dy_cmib_backup.py --train True  --batch_size 64 --device 1 --modal multi --lr 0.005 --type dycmib --vbeta 0.001 --abeta 0.001 --mbeta 0.001 --epochs 150 --tag test_samebeta_0.001 --path "dataset/mr_hisum_split.json"

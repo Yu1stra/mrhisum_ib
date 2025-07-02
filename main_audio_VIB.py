@@ -34,6 +34,7 @@ import random
 
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
+
 def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
@@ -155,16 +156,16 @@ class Solver(object):
                 audio = data['audio'].to(cuda_device)
                 mask = data['mask'].to(cuda_device)
                 
-                #一般---------------------------
+                # 一般---------------------------
                 if self.config.type=="base":
                     score, weights = model(audio, mask)
                     loss = self.criterion(score[mask], gtscore[mask]).mean()
                     loss.backward()
                     loss_history.append(loss.detach().item())
                     self.optimizer.step()
-                #IB+KL-----------------------------------------------------
+                # IB+KL-----------------------------------------------------
                 # **调用 SL_module**
-                #print(input_feature)
+                # print(input_feature)
                 elif self.config.type=="ib":
                     score, kl_loss = model(audio, mask)
                     
@@ -232,7 +233,7 @@ class Solver(object):
                 val_f1score, val_map50, val_map15, val_loss, val_precision, val_map = self.evaluate(dataloader=self.val_loader)
             elif self.config.type=="ib" :
                 val_f1score, val_map50, val_map15, val_loss, val_precision, val_loss_v, val_loss_a, val_kl_loss, val_map = self.evaluate(dataloader=self.val_loader)
-#final_f_score, final_map50, final_map15, final_loss, final_precision, final_prediction_loss_v, final_prediction_loss_a, final_kl_loss
+            #final_f_score, final_map50, final_map15, final_loss, final_precision, final_prediction_loss_v, final_prediction_loss_a, final_kl_loss
             
             # 保存每次比例的日志
             proportion_dir = os.path.join(self.config.save_dir_root, f'logs/proportion_{int(proportion * 100)}')
@@ -259,19 +260,32 @@ class Solver(object):
                 best_f1score = val_f1score
                 best_f1score_epoch = epoch_i
                 f1_save_ckpt_path = os.path.join(self.config.best_f1score_save_dir, f'best_f1.pkl')
+                if os.path.exists(f1_save_ckpt_path):
+                    os.remove(f1_save_ckpt_path)
                 torch.save(state_dict, f1_save_ckpt_path)
+                if f1_save_ckpt_path not in path:
+                    path.append(f1_save_ckpt_path)
 
             if best_map50 <= val_map50:
                 best_map50 = val_map50
                 best_map50_epoch = epoch_i
                 map50_save_ckpt_path = os.path.join(self.config.best_map50_save_dir, f'best_map50.pkl')
+                if os.path.exists(map50_save_ckpt_path):
+                    os.remove(map50_save_ckpt_path)
                 torch.save(state_dict, map50_save_ckpt_path)
+                if map50_save_ckpt_path not in path:
+                    path.append(map50_save_ckpt_path)
             
             if best_map15 <= val_map15:
                 best_map15 = val_map15
                 best_map15_epoch = epoch_i
                 map15_save_ckpt_path = os.path.join(self.config.best_map15_save_dir, f'best_map15.pkl')
+                if os.path.exists(map15_save_ckpt_path):
+                    os.remove(map15_save_ckpt_path)
                 torch.save(state_dict, map15_save_ckpt_path)
+                if map15_save_ckpt_path not in path:
+                    path.append(map15_save_ckpt_path)
+
             if best_map <= val_map:
                 best_map = val_map
                 best_map_epoch = epoch_i
@@ -284,7 +298,7 @@ class Solver(object):
             
             # 调用学习率调度器，传入验证损失作为监控指标
             # 当验证损失不再下降时，ReduceLROnPlateau会自动降低学习率
-            #self.scheduler.step(val_loss)
+            self.scheduler.step(val_loss)
             
             #print("   [Epoch {0}] Train loss: {1:.05f}".format(epoch_i+1, loss))
             #print('    VAL  F-score {0:0.5} | MAP50 {1:0.5} | MAP15 {2:0.5}'.format(val_f1score, val_map50, val_map15))
@@ -532,7 +546,7 @@ class Solver(object):
         f.write('Test MAP     ' + str(test_map) + '\n\n')
         f.flush()
     
-    @staticmethod
+    @ staticmethod
     def init_weights(net, init_type="xavier", init_gain=1.4142):
         """ Initialize 'net' network weights, based on the chosen 'init_type' and 'init_gain'.
 

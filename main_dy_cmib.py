@@ -680,7 +680,7 @@ class Solver(object):
             ap_values = []
 
             for threshold in thresholds:
-                # 根据阈值创建不同的ground truth摘要
+                # 根据阈值创建不同的ground truth摘要MR.HiSum/main_dy_cmib.py
                 gt_summary_at_threshold = top_n_summary(gt_seg_score, threshold)
                 
                 # 计算当前阈值下的AP

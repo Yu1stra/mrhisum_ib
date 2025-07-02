@@ -6,6 +6,7 @@ import numpy as np
 import os
 from tqdm import tqdm
 from sklearn.metrics import average_precision_score
+import time
 from networks.mlp import SimpleMLP
 from networks.pgl_sum.pgl_sum import PGL_SUM
 from networks.vasnet.vasnet import VASNet
@@ -13,8 +14,7 @@ from networks.sl_module.sl_module import *
 from networks.graph_fusion import graph_fusion
 from model.utils.evaluation_metrics import evaluate_summary
 from model.utils.generate_summary import generate_summary
-from model.utils.evaluate_map import generate_mrhisum_seg_scores, top50_summary, top15_summary, top_n_summary
-from model.SMI import sliceMI
+from model.utils.evaluate_map import generate_mrhisum_seg_scores, top50_summary, top15_summary
 from networks.atfuse.ATFuse import FactorAtt_ConvRelPosEnc, MHCABlock, UpScale 
 from networks.CrossAttentional.cam import CAM
 from networks.sl_module.BottleneckTransformer import BottleneckTransformer
@@ -25,11 +25,14 @@ import sys
 import argparse
 from model.configs import Config, str2bool
 from torch.utils.data import DataLoader
-from model.mrhisum_dataset_fixed import MrHiSumDataset, BatchCollator
+from model.mrhisum_dataset import MrHiSumDataset, BatchCollator
+
 
 import random
 
+
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
 
 def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
@@ -46,9 +49,10 @@ def set_seed(seed=42):
     torch.backends.cudnn.benchmark = False
     torch.use_deterministic_algorithms(True)
 
-set_seed(42)
+set_seed(135)
 
-#SL_module_CIB_dy
+#SL_module_LIB_dy
+#self, visual_input_dim, audio_input_dim, depth, heads, mlp_dim, dropout_ratio, visual_bottleneck_dim, audio_bottleneck_dim
 class Solver(object):
     def __init__(self, config=None, train_loader=None, val_loader=None, test_loader=None, device=None, modal=None):
         
@@ -64,20 +68,13 @@ class Solver(object):
         self.criterion = nn.MSELoss(reduction='none').to(self.device)
     
     def build(self):
-        """ Define your own summarization model here """
-        # Model creation
         cuda_device=self.device
-        self.model = SL_module_CIB( 
-            visual_input_dim=1024, 
-            audio_input_dim=128, 
-            depth=5, heads=8, 
-            mlp_dim=3072, 
-            dropout_ratio=0.5, 
-            visual_bottleneck_dim=128, 
-            audio_bottleneck_dim=128).to(cuda_device) #(self, visual_input_dim, audio_input_dim, depth, heads, mlp_dim, dropout_ratio, visual_bottleneck_dim, audio_bottleneck_dim)
-        # Model already moved to device in initialization
+        self.model = SL_module_CIB(visual_input_dim=1024, audio_input_dim=128, depth=5, heads=8, mlp_dim=3072, dropout_ratio=0.5, visual_bottleneck_dim=256, audio_bottleneck_dim=32)
+        self.model.to(cuda_device)
         self.optimizer = optim.SGD(self.model.parameters(), lr=self.config.lr, momentum=0.9, weight_decay=self.config.l2_reg)
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.1)
+
+        
     
     def train(self):
         path50=[]
@@ -95,12 +92,10 @@ class Solver(object):
         best_f1score = -1.0
         best_map50 = -1.0
         best_map15 = -1.0
-        best_map = -1.0
         best_pre = -1.0
         best_f1score_epoch = 0
         best_map50_epoch = 0
         best_map15_epoch = 0
-        best_map_epoch = 0
         best_pre_epoch = 0
         print(f"Training with {int(proportion * 100)}% of the training data...")
         
@@ -113,98 +108,57 @@ class Solver(object):
         subset_dataset = torch.utils.data.Subset(self.train_loader.dataset, subset_indices.tolist())
         subset_loader = torch.utils.data.DataLoader(subset_dataset, batch_size=self.train_loader.batch_size, shuffle=True)"""
 
-        # Create GradScaler with enabled memory-efficient optimizations
-        scaler = torch.cuda.amp.GradScaler(growth_interval=100, enabled=True)
+        scaler = torch.cuda.amp.GradScaler()
 
         for epoch_i in range(self.config.epochs):
-            # Already commented out sleep
+            #time.sleep(0.5)
             print("[Epoch: {0:6}]".format(str(epoch_i+1)+"/"+str(self.config.epochs)))
             model.train()
             loss_history = []
-            kl_loss_history_v = []
-            kl_loss_history_a = []
-            kl_loss_history_m = []
+            kl_loss_v_history = []
+            kl_loss_a_history = []
+            kl_loss_m_history = []
             loss_v_history = []
             loss_a_history = []
             loss_m_history = []
-            v_SMI_history = []
-            a_SMI_history = []
-            m_SMI_history = []
             num_batches = int(len(self.train_loader))
-
-            num_smi_batches = 3
-            # 平均取樣 10 個 batch index，分散在整個 epoch
-            smi_batch_indices = np.linspace(0, num_batches - 1, num=num_smi_batches, dtype=int)
-
             iterator = iter(self.train_loader)
 
-            for batch_idx in tqdm(range(num_batches)):
+            for _ in tqdm(range(num_batches)):
                 
-                # More memory-efficient way to zero gradients
-                self.optimizer.zero_grad(set_to_none=True)
-                # Removed unnecessary sleep
-                try:
-                    data = next(iterator)
-                except StopIteration:
-                    iterator = iter(self.train_loader)
-                    data = next(iterator)
+                self.optimizer.zero_grad()
+                time.sleep(0.05)
+                data = next(iterator)
                 #'video_name' : video_name, 'features' : frame_feat_visual, 'audio':frame_feat_audio, 'gtscore':gtscore, 'mask':mask_visual, 'mask_audio':mask_audio
-                visual = data['features'].to(cuda_device, non_blocking=True)
-                gtscore = data['gtscore'].to(cuda_device, non_blocking=True)
-                audio = data['audio'].to(cuda_device, non_blocking=True)
-                mask = data['mask'].to(cuda_device, non_blocking=True)
+                visual = data['features'].to(cuda_device)
+                gtscore = data['gtscore'].to(cuda_device)
+                audio = data['audio'].to(cuda_device)
+                mask = data['mask'].to(cuda_device)
                 
-                #print(f"visual.shape={visual.shape},audio.shape={audio.shape},gtscore.shape={gtscore.shape}")
-                #score_v, score_m,  kl_loss_v+kl_loss_m
-                with torch.cuda.amp.autocast():
-                    score_v, score_a, score_m,  kl_loss_v, kl_loss_a, kl_loss_m = model(visual, audio, mask)
-                    prediction_loss_v = self.criterion(score_v[mask], gtscore[mask]).mean()
-                    prediction_loss_a = self.criterion(score_a[mask], gtscore[mask]).mean()
-                    prediction_loss_m = self.criterion(score_m[mask], gtscore[mask]).mean()
-                    vbeta = self.config.vbeta  # KL 损失的权重系数
-                    abeta = self.config.abeta  # KL 损失的权重系数
-                    mbeta = self.config.mbeta  # KL 损失的权重系数
-                    total_loss = prediction_loss_v + prediction_loss_m  + vbeta * kl_loss_v + abeta * kl_loss_a + mbeta * kl_loss_m
-                #total_loss = prediction_loss + reconstruction_loss + beta * kl_loss
-                scaler.scale(total_loss).backward()
-                scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(self.optimizer)
-                scaler.update()
-                # total_loss.backward()
-                # === forward 執行後馬上做 SMI ===
-                if self.config.SMI:
-                    if batch_idx in smi_batch_indices:# 每個 epoch 抽十個 batch 算然後是平均在前中後
-                        with torch.no_grad():
-                            for name, feature in {
-                                'visual': self.model.visual_feature,
-                                'audio': self.model.audio_feature,
-                                'fused': self.model.fused_feature,
-                            }.items():
-                                mask_bool = mask.flatten().bool()
-                                feature_flat = feature.view(-1, feature.shape[-1])  # [B*T, D]
-                                gtscore_flat = gtscore.view(-1, 1)
-                                X = feature_flat[mask_bool].cpu()
-                                Y = gtscore_flat[mask_bool].cpu()
-                                del mask_bool, feature_flat, gtscore_flat
-                                torch.cuda.empty_cache()
-                                # Reduce SMI computation parameters for better efficiency
-                                smi_val = sliceMI(X, Y, M=400, n=4000, DY=False)
-                                if name == 'visual':
-                                    v_SMI_history.append(smi_val)
-                                elif name == 'audio':
-                                    a_SMI_history.append(smi_val)
-                                elif name == 'fused':
-                                    m_SMI_history.append(smi_val)
 
+                #score_v, score_m,  kl_loss_v+kl_loss_m
+                score_v, score_a, score_m,  kl_loss_v, kl_loss_a, kl_loss_m, kl_loss = model(visual, audio, mask)
+                prediction_loss_v = self.criterion(score_v[mask], gtscore[mask]).mean()
+                prediction_loss_a = self.criterion(score_a[mask], gtscore[mask]).mean()
+                prediction_loss_m = self.criterion(score_m[mask], gtscore[mask]).mean()
+                vbeta = self.config.vbeta  # KL 损失的权重系数
+                abeta = self.config.abeta  # KL 损失的权重系数
+                mbeta = self.config.mbeta  # KL 损失的权重系数
+                total_loss = prediction_loss_v + prediction_loss_a + prediction_loss_m  + vbeta * kl_loss
+                #total_loss = prediction_loss_v + prediction_loss_a + prediction_loss_m  + vbeta * kl_loss_v + abeta * kl_loss_a + mbeta * kl_loss_m
+                #total_loss = prediction_loss + reconstruction_loss + beta * kl_loss
+                # scaler.scale(total_loss).backward()
+                # scaler.step(self.optimizer)
+                # scaler.update()
+                total_loss.backward()
                 loss_v_history.append(prediction_loss_v.detach().item())
                 loss_a_history.append(prediction_loss_a.detach().item())
                 loss_m_history.append(prediction_loss_m.detach().item())
-                kl_loss_history_v.append(kl_loss_v.detach().item())
-                kl_loss_history_a.append(kl_loss_a.detach().item())
-                kl_loss_history_m.append(kl_loss_m.detach().item())
+                kl_loss_v_history.append(kl_loss_v.detach().item())
+                kl_loss_a_history.append(kl_loss_a.detach().item())
+                kl_loss_m_history.append(kl_loss_m.detach().item())
                 loss_history.append(total_loss.detach().item())
-                # self.optimizer.step()
+                self.optimizer.step()
 
                 
                 #time.sleep(1.5)
@@ -212,18 +166,18 @@ class Solver(object):
                 loss = np.mean(np.array(loss_history))
             else:
                 loss = 0
-            if not kl_loss_history_v==[]:
-                kl_loss_v = np.mean(np.array(kl_loss_history_v))
+            if not kl_loss_v_history==[]:
+                kl_loss_v = np.mean(np.array(kl_loss_v_history))
             else:
-                kl_loss_v = 0 
-            if not kl_loss_history_a==[]:
-                kl_loss_a = np.mean(np.array(kl_loss_history_a))
+                kl_loss_v = 0
+            if not kl_loss_a_history==[]:
+                kl_loss_a = np.mean(np.array(kl_loss_a_history))
             else:
-                kl_loss_a = 0 
-            if not kl_loss_history_m==[]:
-                kl_loss_m = np.mean(np.array(kl_loss_history_m))
+                kl_loss_a = 0
+            if not kl_loss_m_history==[]:
+                kl_loss_m = np.mean(np.array(kl_loss_m_history))
             else:
-                kl_loss_m = 0 
+                kl_loss_m = 0
             if not loss_v_history==[]:
                 v_loss = np.mean(np.array(loss_v_history))
             else:
@@ -242,52 +196,30 @@ class Solver(object):
             val_f1score=0
             val_map50=0
             val_map15=0
-            val_map=0
             val_precision=0
-            val_f1score, val_map50, val_map15, val_map, val_loss, val_precision, _, _, _, _, _, _, = self.evaluate(dataloader=self.val_loader)
-            #final_f_score, final_map50, final_map15, final_loss, final_precision, final_prediction_loss_v, final_prediction_loss_a, final_kl_loss
-            #final_f_score, final_map50, final_map15, final_loss, final_precision, final_prediction_loss_v, final_prediction_loss_a, final_prediction_loss_m, final_kl_loss_v, final_kl_loss_a, final_kl_loss_m        
+            val_f1score, val_map50, val_map15, val_loss, val_precision, val_loss_v, val_loss_a, val_kl_v_loss,  val_kl_a_loss= self.evaluate(dataloader=self.val_loader)
+#final_f_score, final_map50, final_map15, final_loss, final_precision, final_prediction_loss_v, final_prediction_loss_a, final_kl_loss
+            
             # 保存每次比例的日志
             proportion_dir = os.path.join(self.config.save_dir_root, f'logs/proportion_{int(proportion * 100)}')
             os.makedirs(proportion_dir, exist_ok=True)
-            v_SMI = np.mean(v_SMI_history)
-            a_SMI = np.mean(a_SMI_history)
-            m_SMI = np.mean(m_SMI_history)
-
-            f = open(os.path.join(self.config.save_dir_root, 'logs/SMI_result.txt'), 'a')
-            if self.config.SMI:
-                print(f"Epoch: {epoch_i+1}, v_SMI: {v_SMI:.5f}, a_SMI: {a_SMI:.5f}, m_SMI: {m_SMI:.5f}")
-                if epoch_i == 0:
-                    f.write(f"Epoch     v_SMI     a_SMI     m_SMI\n")
-                f.write(f"   {epoch_i + 1}     {v_SMI:.5f}     {a_SMI:.5f}     {m_SMI:.5f}\n")
-            else:
-                print("No use SMI")
-                if epoch_i == 0:
-                    f.write("No use SMI")
-            f.flush()
-            f.close()
-
-
+            #
             f = open(os.path.join(proportion_dir, 'results.txt'), 'a')
             print(f"proportion: {proportion}, type: {type(proportion)}")
             print(f"epoch_i: {epoch_i}, type: {type(epoch_i)}")
 
-            f.write(f'[Proportion {str(proportion * 100)}% | Epoch {str(epoch_i+1)}], \n'
+            f.write(f'[Proportion {str(proportion * 100)}% | Epoch {str(epoch_i + 1)}], \n'
                     f'Train Loss: {loss:.5f}, Val Loss: {val_loss:.5f}, \n'
                     f'Visual loss: {v_loss:.5f}, Audio loss: {a_loss:.5f}\n'
                     f'Multi loss: {m_loss:.5f}\n'
                     f'Visual KL loss: {kl_loss_v:.5f}, Audio KL loss: {kl_loss_a:.5f}\n'
                     f'Multi KL loss: {kl_loss_m:.5f}\n'
                     f'Val F1 Score: {val_f1score:.5f}, Val MAP50: {val_map50:.5f}, \n'
-                    f'Val MAP15: {val_map15:.5f}\n'
-                    f'Val MAP: {val_map:.5f}\n')    
+                    f'Val MAP15: {val_map15:.5f}\n')
             f.flush()
             f.close()
             f = open(os.path.join(self.config.save_dir_root, 'logs/loss.txt'), 'a')
-            
-            if epoch_i==0:
-                f.write(f'Epoch     loss     val_loss     \n')
-            f.write(f'{epoch_i + 1}     {loss}     {val_loss}     \n')
+            f.write(f'Epoch: {epoch_i+1}, loss: {loss}, val_loss: {val_loss}\n')
             f.flush()
             f.close()
             state_dict=model.state_dict()
@@ -468,47 +400,29 @@ class Solver(object):
                     torch.save(state_dict, pre_save_ckpt_path)
                     if pre_save_ckpt_path not in path:
                         path.append(pre_save_ckpt_path)
-            if best_map <= val_map:
-                best_map = val_map
-                best_map_epoch = epoch_i
-                best_map_ckpt_path = os.path.join(self.config.best_map_save_dir, f'Proportion_{int(proportion * 100)}%_best_map.pkl')
-                if os.path.exists(best_map_ckpt_path):
-                    os.remove(best_map_ckpt_path)
-                torch.save(state_dict, best_map_ckpt_path)
-                if best_map_ckpt_path not in path:
-                    path.append(best_map_ckpt_path)
             
             #print("   [Epoch {0}] Train loss: {1:.05f}".format(epoch_i+1, loss))
             #print('    VAL  F-score {0:0.5} | MAP50 {1:0.5} | MAP15 {2:0.5}'.format(val_f1score, val_map50, val_map15))
-            # print(f'[Proportion {str(proportion * 100)}% | Epoch {str(epoch_i+1)}], \n'
-            #             f'Train Loss: {loss:.5f}, Val Loss: {val_loss:.5f}, \n'
-            #             f'Visual loss: {v_loss:.5f}, Audio loss: {a_loss:.5f}\n'
-            #             f'Val F1 Score: {val_f1score:.5f}, Val MAP50: {val_map50:.5f}, \n'
-            #             f'Val MAP15: {val_map15:.5f}, KL loss: {kl_loss:.5f}\n') 
-            print(f'[Proportion {str(proportion * 100)}% | Epoch {str(epoch_i+1)}], \n'
-                    f'Train Loss: {loss:.5f}, Val Loss: {val_loss:.5f}, \n'
-                    f'Visual loss: {v_loss:.5f}, Audio loss: {a_loss:.5f}\n'
-                    f'Multi loss: {m_loss:.5f}\n'
-                    f'Visual KL loss: {kl_loss_v:.5f}, Audio KL loss: {kl_loss_a:.5f}\n'
-                    f'Multi KL loss: {kl_loss_m:.5f}\n'
-                    f'Val F1 Score: {val_f1score:.5f}, Val MAP50: {val_map50:.5f}, \n'
-                    f'Val MAP15: {val_map15:.5f}\n'
-                    f'Val MAP: {val_map:.5f}\n')
+            print(f'[Proportion {str(proportion * 100)}% | Epoch {str(epoch_i + 1)}], \n'
+                  f'Train Loss: {loss:.5f}, Val Loss: {val_loss:.5f}, \n'
+                  f'Visual loss: {v_loss:.5f}, Audio loss: {a_loss:.5f}\n'
+                  f'Multi loss: {m_loss:.5f}, Total loss: {total_loss:.5f}\n'
+                  f'Visual KL loss: {kl_loss_v:.5f}, Audio KL loss: {kl_loss_a:.5f}\n'
+                  f'Multi KL loss: {kl_loss_m:.5f}\n'
+                  f'Val F1 Score: {val_f1score:.5f}, Val MAP50: {val_map50:.5f}, \n'
+                  f'Val MAP15: {val_map15:.5f}\n')
             f = open(os.path.join(self.config.save_dir_root, 'logs/all_result.txt'), 'a')
             if epoch_i == 0:
-                f.write(f'Epoch     Val_f1score     Val_map50     Val_map15     Val_map     \n')
-            f.write(f'{epoch_i+1}     {val_f1score}     {val_map50}     {val_map15}     {val_map}     \n')
+                f.write(f'Epoch     Val_f1score     Val_map50     Val_map15     Val_precision     \n')
+            f.write(f'{epoch_i + 1}     {val_f1score}     {val_map50}     {val_map15}     {val_precision}     \n')
             f.flush()
             f.close()
             #del data, visual, gtscore, audio, mask, score, weights, loss
-            # === SMI 分析（只在 mbeta = 1e-4 時執行） ===
-
             gc.collect()
         print(f'  [Proportion {int(proportion * 100)}%]')
         print('   Best Val F1 score {0:0.5} @ epoch{1}'.format(best_f1score, best_f1score_epoch+1))
         print('   Best Val MAP-50   {0:0.5} @ epoch{1}'.format(best_map50, best_map50_epoch+1))
         print('   Best Val MAP-15   {0:0.5} @ epoch{1}'.format(best_map15, best_map15_epoch+1))
-        print('   Best Val MAP     {0:0.5} @ epoch{1}'.format(best_map, best_map_epoch+1))
         print('   Best Val PRECISION   {0:0.5} @ epoch{1}'.format(best_pre, best_pre_epoch+1))
 
         f = open(os.path.join(self.config.save_dir_root, 'results.txt'), 'a')
@@ -516,11 +430,10 @@ class Solver(object):
         f.write('   Best Val F1 score {0:0.5} @ epoch{1}\n'.format(best_f1score, best_f1score_epoch+1))
         f.write('   Best Val MAP-50   {0:0.5} @ epoch{1}\n'.format(best_map50, best_map50_epoch+1))
         f.write('   Best Val MAP-15   {0:0.5} @ epoch{1}\n'.format(best_map15, best_map15_epoch+1))
-        f.write('   Best Val MAP     {0:0.5} @ epoch{1}\n'.format(best_map, best_map_epoch+1))
         f.write('   Best Val PRECISION   {0:0.5} @ epoch{1}\n\n'.format(best_pre, best_pre_epoch+1))
         f.flush()
         f.close()
-        torch.cuda.empty_cache()
+            
         return path, path50, path100, path150, path200
         #return f1_save_ckpt_path, map50_save_ckpt_path, map15_save_ckpt_path
 
@@ -533,16 +446,15 @@ class Solver(object):
         cuda_device=self.device
         model.eval()
         loss_history = []
-        kl_loss_history_v = []
-        kl_loss_history_a = []
-        kl_loss_history_m = []
+        kl_loss_v_history = []
+        kl_loss_a_history = []
+        kl_loss_m_history = []
         loss_v_history = []
         loss_a_history = []
         loss_m_history = []
         fscore_history = []
         map50_history = []
         map15_history = []
-        map_history = []
         precision_history = []
         
         dataloader = iter(dataloader)
@@ -568,26 +480,25 @@ class Solver(object):
             if input_mask in data:
                 mask = data[input_mask].to(cuda_device)
             with torch.no_grad():
-                score_v, score_a, score_m,  kl_loss_v, kl_loss_a, kl_loss_m = model(visual, audio, mask)
+                score_v, score_a, score_m,  kl_loss_v, kl_loss_a, kl_loss_m, kl_loss = model(visual, audio, mask)
             prediction_loss_v = self.criterion(score_v[mask], gtscore[mask]).mean()
             prediction_loss_a = self.criterion(score_a[mask], gtscore[mask]).mean()
             prediction_loss_m = self.criterion(score_m[mask], gtscore[mask]).mean()
             vbeta = self.config.vbeta  # KL 损失的权重系数
             abeta = self.config.abeta  # KL 损失的权重系数
             mbeta = self.config.mbeta  # KL 损失的权重系数
-            total_loss = prediction_loss_v + prediction_loss_m  + vbeta * kl_loss_v + abeta * kl_loss_a + mbeta * kl_loss_m
+            total_loss = prediction_loss_v + prediction_loss_a + prediction_loss_m + vbeta * kl_loss
+            #total_loss = prediction_loss_v + prediction_loss_a + prediction_loss_m + vbeta * kl_loss_v + abeta * kl_loss_a + mbeta * kl_loss_m
             #total_loss = prediction_loss + reconstruction_loss + beta * kl_loss
             torch.cuda.synchronize() 
             #total_loss.backward()
             loss_v_history.append(prediction_loss_v.detach().item())
-            #loss_a_history.append(prediction_loss_a.detach().item())
-            loss_v_history.append(prediction_loss_v.detach().item())
             loss_a_history.append(prediction_loss_a.detach().item())
             loss_m_history.append(prediction_loss_m.detach().item())
-            kl_loss_history_v.append(kl_loss_v.detach().item())
-            kl_loss_history_a.append(kl_loss_a.detach().item())
-            kl_loss_history_m.append(kl_loss_m.detach().item())
             loss_history.append(total_loss.detach().item())
+            kl_loss_v_history.append(kl_loss_v.detach().item())
+            kl_loss_a_history.append(kl_loss_a.detach().item())
+            kl_loss_m_history.append(kl_loss_m.detach().item())
             #self.optimizer.step()
             # Calculate precision
             predictions = (score_m > 0.5).float()  # Example threshold, modify as needed
@@ -624,37 +535,14 @@ class Solver(object):
             
             clone_machine_summary = highlight_seg_machine_score.clone().detach().cpu()
             clone_machine_summary = clone_machine_summary.numpy()
-            
-            # 获取gt_seg_score的numpy格式用于计算
-            gt_seg_score_np = gt_seg_score.clone().detach().cpu().numpy()
-            
-            # 归一化真实标签分数（如果尚未归一化）
-            gt_scores_normalized = gt_seg_score_np / np.max(gt_seg_score_np) if np.max(gt_seg_score_np) > 0 else gt_seg_score_np
-            
-            # 使用一系列阈值将连续标签转换为二元标签
-            thresholds = np.arange(0.05, 1.0, 0.05)  
-            ap_values = []
-            
-            for threshold in thresholds:
-                # 将连续真实标签转换为二元标签
-                binary_gt = (gt_scores_normalized >= threshold).astype(int)
-                
-                # 计算当前阈值下的AP
-                ap_at_threshold = average_precision_score(binary_gt, clone_machine_summary)
-                ap_values.append(ap_at_threshold)
-            
-            # 计算mAP（所有阈值下AP的平均值）
-            mAP = np.mean(ap_values) if ap_values else 0
             aP50 = average_precision_score(gt_top50_summary, clone_machine_summary)
             aP15 = average_precision_score(gt_top15_summary, clone_machine_summary)
-            map_history.append(mAP)
             map50_history.append(aP50)
             map15_history.append(aP15)
 
         final_f_score = np.mean(fscore_history)
         final_map50 = np.mean(map50_history)
         final_map15 = np.mean(map15_history)
-        final_map = np.mean(map_history) if map_history else 0
         final_precision = np.mean(precision_history)
         final_loss = np.mean(loss_history)
         if not loss_v_history==[]:
@@ -665,23 +553,19 @@ class Solver(object):
             final_prediction_loss_a = np.mean(loss_a_history)
         else:
             final_prediction_loss_a = 0
-        if not loss_m_history==[]:
-            final_prediction_loss_m = np.mean(loss_m_history)
+        if not kl_loss_v_history==[]:
+            final_kl_v_loss = np.mean(kl_loss_v_history)
         else:
-            final_prediction_loss_m = 0
-        if not kl_loss_history_v==[]:
-            final_kl_loss_v = np.mean(kl_loss_history_v)
+            final_kl_v_loss = 0
+        if not kl_loss_a_history==[]:
+            final_kl_a_loss = np.mean(kl_loss_a_history)
         else:
-            final_kl_loss_v = 0
-        if not kl_loss_history_a==[]:
-            final_kl_loss_a = np.mean(kl_loss_history_a)
+            final_kl_a_loss = 0
+        if not kl_loss_m_history==[]:
+            final_kl_m_loss = np.mean(kl_loss_m_history)
         else:
-            final_kl_loss_a = 0
-        if not kl_loss_history_m==[]:
-            final_kl_loss_m = np.mean(kl_loss_history_m)
-        else:
-            final_kl_loss_m = 0
-        return final_f_score, final_map50, final_map15, final_map, final_loss, final_precision, final_prediction_loss_v, final_prediction_loss_a, final_prediction_loss_m, final_kl_loss_v, final_kl_loss_a, final_kl_loss_m
+            final_kl_m_loss = 0
+        return final_f_score, final_map50, final_map15, final_loss, final_precision, final_prediction_loss_v, final_prediction_loss_a, final_kl_v_loss, final_kl_a_loss
             
     def test(self, ckpt_path):
         model=self.model
@@ -690,11 +574,11 @@ class Solver(object):
             print("Testing Model: ", ckpt_path)
             print("Device: ",  cuda_device)
             model.load_state_dict(torch.load(ckpt_path))
-        test_fscore, test_map50, test_map15, test_map, _, _, _, _, _, _, _, _ = self.evaluate(dataloader=self.test_loader)
+        test_fscore, test_map50, test_map15, _, _, _, _, _, _ = self.evaluate(dataloader=self.test_loader)
 
         print("------------------------------------------------------")
         print(f"   TEST RESULT on {ckpt_path}: ")
-        print('   TEST MRHiSum F-score {0:0.5} | MAP50 {1:0.5} | MAP15 {2:0.5} | MAP {3:0.5}'.format(test_fscore, test_map50, test_map15, test_map))
+        print('   TEST MRHiSum F-score {0:0.5} | MAP50 {1:0.5} | MAP15 {2:0.5}'.format(test_fscore, test_map50, test_map15))
         print("------------------------------------------------------")
         
         f = open(os.path.join(self.config.save_dir_root, 'results.txt'), 'a')
@@ -702,109 +586,8 @@ class Solver(object):
         f.write('Test F-score ' + str(test_fscore) + '\n')
         f.write('Test MAP50   ' + str(test_map50) + '\n')
         f.write('Test MAP15   ' + str(test_map15) + '\n\n')
-        f.write('Test MAP     ' + str(test_map) + '\n\n')
         f.flush()
-
     
-    def save_epoch_smi(self, epoch_i, v_smi, a_smi, m_smi):
-        """保存每個epoch的SMI數據 (4.1風格)"""
-        import pickle
-        import os
-        
-        # 將三種特徵的SMI添加到smi_all_epochs
-        self.smi_all_epochs[f'Epoch{epoch_i+1:02d}'] = [v_smi, a_smi, m_smi]
-        
-        # 保存到文件
-        smi_file = os.path.join(self.config.save_dir_root, 'smi_training_history.pkl')
-        with open(smi_file, 'wb') as f:
-            pickle.dump(self.smi_all_epochs, f, pickle.HIGHEST_PROTOCOL)
-        
-        print(f"Epoch {epoch_i+1} SMI data saved to {smi_file}")
-    
-    def analyze_final_model_smi(self, mode="val"):
-        """分析最終模型的所有層的SMI (4.2風格)"""
-        print(f"Analyzing final model SMI for all layers using {mode} data...")
-        import pickle
-        import os
-        
-        model = self.model
-        cuda_device = self.device
-        
-        # 註冊鉤子獲取中間層輸出
-        activations = {}
-        hooks = []
-        
-        def get_activation(name):
-            def hook(module, input, output):
-                if isinstance(output, tuple):
-                    activations[name] = output[0].detach()
-                else:
-                    activations[name] = output.detach()
-            return hook
-        
-        # 註冊鉤子到所有有權重的層
-        for name, module in model.named_modules():
-            if hasattr(module, 'weight') and module.weight is not None:
-                hook = module.register_forward_hook(get_activation(name))
-                hooks.append(hook)
-        
-        # 使用指定數據集進行前向傳播
-        with torch.no_grad():
-            smi_all_layers = {}
-            
-            # 選擇數據集
-            eval_loader = self.val_loader if mode == "val" else self.test_loader
-            
-            # 只使用一個批次的數據
-            for batch_idx, data in enumerate(eval_loader):
-                if batch_idx > 0:  # 只使用第一個批次
-                    break
-                    
-                # 準備數據
-                visual = data['features'].to(cuda_device)
-                gtscore = data['gtscore'].to(cuda_device)
-                audio = data['audio'].to(cuda_device)
-                mask = data['mask'].to(cuda_device)
-                
-                # 前向傳播
-                model(visual, audio, mask)
-                
-                # 計算每層的SMI
-                mask_bool = mask.flatten().bool()
-                gtscore_flat = gtscore.view(-1, 1)
-                Y = gtscore_flat[mask_bool].cpu()
-                
-                for name, activation in activations.items():
-                    try:
-                        # 處理不同形狀的激活
-                        if len(activation.shape) > 2:
-                            activation_flat = activation.view(activation.size(0), -1, activation.size(-1))
-                            activation_flat = activation_flat.view(-1, activation_flat.size(-1))
-                        else:
-                            activation_flat = activation
-                        
-                        # 使用掩碼獲取有效數據
-                        X = activation_flat[mask_bool].cpu()
-                        
-                        # 使用較高的M值計算SMI
-                        smi_val = sliceMI(X, Y, M=1000, n=4000, DY=False)
-                        smi_all_layers[name] = smi_val
-                        print(f'Layer {name}: SI(T;Y)={smi_val:.3f}')
-                    except Exception as e:
-                        print(f"Skipping layer {name} due to error: {str(e)}")
-        
-        # 移除鉤子
-        for hook in hooks:
-            hook.remove()
-        
-        # 保存結果
-        smi_file = os.path.join(self.config.save_dir_root, f'smi_final_model_{mode}.pkl')
-        with open(smi_file, 'wb') as f:
-            pickle.dump(smi_all_layers, f, pickle.HIGHEST_PROTOCOL)
-        
-        print(f"Final model SMI analysis saved to {smi_file}")
-        return smi_all_layers
-        
     @staticmethod
     def init_weights(net, init_type="xavier", init_gain=1.4142):
         """ Initialize 'net' network weights, based on the chosen 'init_type' and 'init_gain'.
@@ -829,35 +612,35 @@ class Solver(object):
                 nn.init.constant_(param, 0.1)
 
 if __name__ == '__main__':
+
+    # 在main函数开头添加
+    torch.backends.cudnn.benchmark = False
+    os.environ['PYTHONHASHSEED'] = str(42)
+    # 确保所有随机源都已固定
     gc.collect()
     torch.cuda.empty_cache()
     os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
     g = torch.Generator()
     g.manual_seed(42)
-
+    
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type = str, default = 'SL_module', help = 'the name of the model')
-    parser.add_argument('--epochs', type = int, default = 5, help = 'the number of training epochs')
+    parser.add_argument('--epochs', type = int, default = 200, help = 'the number of training epochs')
     parser.add_argument('--lr', type = float, default = 5e-5, help = 'the learning rate')
     parser.add_argument('--l2_reg', type = float, default = 1e-4, help = 'l2 regularizer')
     parser.add_argument('--dropout_ratio', type = float, default = 0.5, help = 'the dropout ratio')
-    parser.add_argument('--batch_size', type = int, default = 16, help = 'the batch size')
-    parser.add_argument('--tag', type = str, default = 'test', help = 'A tag for experiments')
+    parser.add_argument('--batch_size', type = int, default = 256, help = 'the batch size')
+    parser.add_argument('--tag', type = str, default = 'dev', help = 'A tag for experiments')
     parser.add_argument('--ckpt_path', type = str, default = None, help = 'checkpoint path for inference or weight initialization')
     parser.add_argument('--train', type=str2bool, default='true', help='when use Train')
-    parser.add_argument('--path', type=str, default='dataset/mr_hisum_split.json', help='path')
-    parser.add_argument('--device', type=str, default='1', help='gpu')
+    parser.add_argument('--path', type=str, default='dataset/metadata_split.json', help='path')
+    parser.add_argument('--device', type=str, default='0', help='gpu')
     parser.add_argument('--modal', type=str, default='visual', help='visual,audio,multi')
     parser.add_argument('--vbeta', type=float, default=0, help='beta_visual')
     parser.add_argument('--abeta', type=float, default=0, help='beta_audio')
     parser.add_argument('--mbeta', type=float, default=0, help='beta_multi')
     parser.add_argument('--type',type = str, default='base', help='base,ib,cib,eib,lib')#cib,eib,lib
-    parser.add_argument('--SMI', type=bool, default=True, help='use SMI eval')
-    parser.add_argument('--smi_layers', type=bool, default=True, help='analyze all model layers with SMI (4.2 style)')
-    parser.add_argument('--smi_epochs', type=bool, default=True, help='track SMI across epochs (4.1 style)')
-    arser.add_argument('--gpus', type=int, default=1, help='number of GPUs to use (1=single GPU, 2=two GPUs)')
-    #parser.add_argument('--savepath', type = str, default='default', help='save folder path')
 
     opt = parser.parse_args()
     # print(type(opt))

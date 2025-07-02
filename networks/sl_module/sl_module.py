@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from networks.sl_module.transformer import Transformer
+from networks.sl_module.transformer import Transformer, Transformer_with_ib, Transformer_with_ib_post
 from networks.sl_module.score_net import ScoreFCN
 import math
 from torch.nn.parameter import Parameter
@@ -40,17 +40,20 @@ class InformationBottleneck(nn.Module):
         x_reconstructed = self.decoder(z)  # 还原输入
         return z, x_reconstructed, mu, std  # 额外返回 mu 和 logvar 用于计算 KL 损失
 
-def kl_divergence(mu, std):
+def kl_divergence_a(mu, std):
     #计算 KL 散度，使分布逼近标准正态 
-    KL = 0.5 * torch.mean(mu.pow(2) + std.pow(2) - 2 * std.log() - 1)
-    #KL = -0.5 * torch.sum(1 + logvar - mu.pow(2) - std.exp(), dim=-1).mean()
+    #KL = 0.5 * torch.mean(mu.pow(2) + std.pow(2) - 2 * std.log() - 1)
+    #KL = -0.5 * torch.sum(1+std - mu.pow(2) - std.exp(), dim=-1).mean()
+    # 标准KL散度（与正态分布）
+    KL = 0.5 * torch.mean(mu.pow(2) + std.pow(2) - torch.log(std.pow(2)) - 1)
     return KL
-
+def kl_divergence(mu, logvar):
+    return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
 class SL_module_IB_tran(nn.Module):
 
     def __init__(self, input_dim, depth, heads, mlp_dim, dropout_ratio, bottleneck_dim):
-        super(SL_module_IB, self).__init__()
+        super(SL_module_IB_tran, self).__init__()
 
         # 加入 IB 层
         self.ib = InformationBottleneck(input_dim, bottleneck_dim)
@@ -66,7 +69,7 @@ class SL_module_IB_tran(nn.Module):
             self.transformer.load_state_dict(state_dict['transformer'])
             self.score_model.load_state_dict(state_dict['score_model'])
         else:
-            super(SL_module_IB, self).load_state_dict(state_dict)
+            super(SL_module_IB_tran, self).load_state_dict(state_dict)
 
     def forward(self, x, mask):
 
@@ -86,7 +89,7 @@ class SL_module_IB_tran(nn.Module):
 class SL_module_tran_IB(nn.Module):
 
     def __init__(self, input_dim, depth, heads, mlp_dim, dropout_ratio, bottleneck_dim):
-        super(SL_module_IB, self).__init__()
+        super(SL_module_tran_IB, self).__init__()
 
         # 加入 IB 层
         self.ib = InformationBottleneck(input_dim, bottleneck_dim)
@@ -103,7 +106,7 @@ class SL_module_tran_IB(nn.Module):
             self.transformer.load_state_dict(state_dict['transformer'])
             self.score_model.load_state_dict(state_dict['score_model'])
         else:
-            super(SL_module_IB, self).load_state_dict(state_dict)
+            super(SL_module_tran_IB, self).load_state_dict(state_dict)
 
     def forward(self, x, mask):
 
@@ -147,14 +150,14 @@ class SL_module_CIB(nn.Module):
     def forward(self, v, a, mask):
         # **信息瓶颈处理**
         z_v, x_reconstructed_v, mu_v, logvar_v = self.ib_v(v)
-        kl_loss_v = kl_divergence(mu_v, logvar_v)
+        kl_loss_v = kl_divergence_a(mu_v, logvar_v)
         transformed_emb_v = self.transformer_v(z_v)
         score_v = self.score_model_v(transformed_emb_v).squeeze(-1)
         score_v = torch.sigmoid(score_v)
 
         
         z_a, x_reconstructed_a, mu_a, logvar_a = self.ib_a(a)
-        kl_loss_a = kl_divergence(mu_a, logvar_a)
+        kl_loss_a = kl_divergence_a(mu_a, logvar_a)
         transformed_emb_a = self.transformer_a(z_a)
         score_a = self.score_model_a(transformed_emb_a).squeeze(-1)
         score_a = torch.sigmoid(score_a)
@@ -162,7 +165,7 @@ class SL_module_CIB(nn.Module):
         m=torch.cat([z_v,z_a],dim=-1)
         #print(m.shape)
         z_m, x_reconstructed_m, mu_m, logvar_m = self.ib_m(m)
-        kl_loss_m = kl_divergence(mu_m, logvar_m)
+        kl_loss_m = kl_divergence_a(mu_m, logvar_m)
         transformed_emb_m = self.transformer_m(z_m)
         score_m = self.score_model_m(transformed_emb_m).squeeze(-1)
         score_m = torch.sigmoid(score_m)
@@ -173,7 +176,8 @@ class SL_module_CIB(nn.Module):
             self.fused_feature = z_m
         except:
             print("not success in self.fused_feature")
-        return score_v, score_a, score_m,  kl_loss_v, kl_loss_a, kl_loss_m  # 返回 KL 损失所需的 mu & logvar
+        kl_loss = kl_loss_v + kl_loss_a + kl_loss_m
+        return score_v, score_a, score_m,  kl_loss_v, kl_loss_a, kl_loss_m, kl_loss  # 返回 KL 损失所需的 mu & logvar
         
 class SL_module_EIB(nn.Module):
 
@@ -356,6 +360,7 @@ class SL_module_multi(nn.Module):
         score = self.score_model(transformed_emb).squeeze(-1)
         #print(transformed_emb)
         score = torch.sigmoid(score)
+
 
         return score, 0.0
 
@@ -557,6 +562,93 @@ class SL_module_VIB(nn.Module):
         
         # **最终评分**
         score = self.score_model(transformed_emb).squeeze(-1)
+        score = torch.sigmoid(score)
+        kl_loss = self.ib.kl_closed_form(x)
+
+        return score, kl_loss  # 返回 KL 损失所需的 mu & logvar
+
+class SL_module_VIB_in_transformer(nn.Module):
+    def __init__(self, input_dim, depth, heads, mlp_dim, dropout_ratio):
+        super(SL_module_VIB_in_transformer, self).__init__()
+        
+        self.transformer = Transformer_with_ib(dim=input_dim, depth=depth, heads=heads, mlp_dim=mlp_dim, dropout=dropout_ratio)
+        self.score_model = ScoreFCN(emb_dim=input_dim)
+
+    def load_state_dict(self, state_dict, strict=True):
+        if 'transformer' in state_dict.keys(): 
+            self.transformer.load_state_dict(state_dict['transformer'])
+            self.score_model.load_state_dict(state_dict['score_model'])
+        else:
+            super(SL_module_VIB_in_transformer, self).load_state_dict(state_dict)
+
+    def forward(self, x, mask):
+
+        # **Transformer 提取特征**\
+        transformed_emb, kl_loss = self.transformer(x)
+        # **信息瓶颈处理**
+        
+        # **最终评分**
+        score = self.score_model(transformed_emb).squeeze(-1)
+        score = torch.sigmoid(score)
+
+        return score, kl_loss  # 返回 KL 损失所需的 mu & logvar
+
+class SL_module_VIB_in_transformer_post(nn.Module):
+    def __init__(self, input_dim, depth, heads, mlp_dim, dropout_ratio):
+        super(SL_module_VIB_in_transformer_post, self).__init__()
+        
+        self.transformer = Transformer_with_ib_post(dim=input_dim, depth=depth, heads=heads, mlp_dim=mlp_dim, dropout=dropout_ratio)
+        self.score_model = ScoreFCN(emb_dim=input_dim)
+
+    def load_state_dict(self, state_dict, strict=True):
+        if 'transformer' in state_dict.keys(): 
+            self.transformer.load_state_dict(state_dict['transformer'])
+            self.score_model.load_state_dict(state_dict['score_model'])
+        else:
+            super(SL_module_VIB_in_transformer_post, self).load_state_dict(state_dict)
+
+    def forward(self, x, mask):
+
+        # **Transformer 提取特征**\
+        transformed_emb, kl_loss = self.transformer(x)
+        # **信息瓶颈处理**
+        
+        # **最终评分**
+        score = self.score_model(transformed_emb).squeeze(-1)
+        score = torch.sigmoid(score)
+
+        return score, kl_loss  # 返回 KL 损失所需的 mu & logvar
+
+class SL_module_VIB_postib(nn.Module):
+    def __init__(self, input_dim, depth, heads, mlp_dim, dropout_ratio):
+        super(SL_module_VIB_postib, self).__init__()
+
+        # Transformer 处理瓶颈后的特征
+        self.transformer = Transformer(dim=input_dim, depth=depth, heads=heads, mlp_dim=mlp_dim, dropout=dropout_ratio)
+
+        self.ib = InformationBottleneck_VIB(input_dim)
+
+        # Score 计算
+        self.score_model = ScoreFCN(emb_dim=input_dim)
+        
+    def load_state_dict(self, state_dict, strict=True):
+        if 'transformer' in state_dict.keys(): 
+            self.transformer.load_state_dict(state_dict['transformer'])
+            self.score_model.load_state_dict(state_dict['score_model'])
+        else:
+            super(SL_module_VIB_postib, self).load_state_dict(state_dict)
+
+    def forward(self, x, mask):
+
+        # **Transformer 提取特征**\
+        
+        transformed_emb = self.transformer(x)
+
+        z= self.ib(transformed_emb)
+        # **信息瓶颈处理**
+        
+        # **最终评分**
+        score = self.score_model(z).squeeze(-1)
         score = torch.sigmoid(score)
         kl_loss = self.ib.kl_closed_form(x)
 

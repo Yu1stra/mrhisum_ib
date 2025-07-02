@@ -186,7 +186,7 @@ class Solver(object):
                         total_loss = prediction_loss
                         
                     # 计算梯度并更新
-                    self.optimizer.zero_grad()
+                    #self.optimizer.zero_grad()
                     total_loss.backward()
                     
                     # 记录损失
@@ -259,19 +259,32 @@ class Solver(object):
                 best_f1score = val_f1score
                 best_f1score_epoch = epoch_i
                 f1_save_ckpt_path = os.path.join(self.config.best_f1score_save_dir, f'best_f1.pkl')
+                if os.path.exists(f1_save_ckpt_path):
+                    os.remove(f1_save_ckpt_path)
                 torch.save(state_dict, f1_save_ckpt_path)
+                if f1_save_ckpt_path not in path:
+                    path.append(f1_save_ckpt_path)
 
             if best_map50 <= val_map50:
                 best_map50 = val_map50
                 best_map50_epoch = epoch_i
                 map50_save_ckpt_path = os.path.join(self.config.best_map50_save_dir, f'best_map50.pkl')
+                if os.path.exists(map50_save_ckpt_path):
+                    os.remove(map50_save_ckpt_path)
                 torch.save(state_dict, map50_save_ckpt_path)
+                if map50_save_ckpt_path not in path:
+                    path.append(map50_save_ckpt_path)
             
             if best_map15 <= val_map15:
                 best_map15 = val_map15
                 best_map15_epoch = epoch_i
                 map15_save_ckpt_path = os.path.join(self.config.best_map15_save_dir, f'best_map15.pkl')
+                if os.path.exists(map15_save_ckpt_path):
+                    os.remove(map15_save_ckpt_path)
                 torch.save(state_dict, map15_save_ckpt_path)
+                if map15_save_ckpt_path not in path:
+                    path.append(map15_save_ckpt_path)
+
             if best_map <= val_map:
                 best_map = val_map
                 best_map_epoch = epoch_i
@@ -403,7 +416,7 @@ class Solver(object):
                     else:
                         total_loss = prediction_loss
                     
-                    torch.cuda.synchronize()
+                    #torch.cuda.synchronize()
                     
                     # 记录损失值
                     pred_loss_val = prediction_loss.detach().cpu().item()
