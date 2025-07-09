@@ -18,10 +18,6 @@ from model.utils.evaluate_map import generate_mrhisum_seg_scores, top50_summary,
 from networks.atfuse.ATFuse import FactorAtt_ConvRelPosEnc, MHCABlock, UpScale
 from networks.CrossAttentional.cam import CAM
 from networks.sl_module.BottleneckTransformer import BottleneckTransformer
-import gc
-import tracemalloc
-import objgraph
-import sys
 import os
 import torch
 import argparse
@@ -30,30 +26,97 @@ from model.configs import Config, str2bool
 from torch.utils.data import DataLoader
 from model.mrhisum_dataset_fixed import MrHiSumDataset, BatchCollator
 
-import random
 
-os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+# 添加新的时间感知距离计算类
+class TimeAwareCost(nn.Module):
+    """时间感知成本函数：量化序列间的几何差异"""
+    def __init__(self, w1=0.4, w2=0.4, w3=0.2):
+        super().__init__()
+        self.w = [w1, w2, w3]
 
+    def soft_dtw(self, x, y, gamma=0.1):
+        """改进版软DTW实现，确保正值输出（支持自动微分）"""
+        n, m = x.shape[0], y.shape[0]
 
-def seed_worker(worker_id):
-    worker_seed = torch.initial_seed() % 2 ** 32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
+        x_norm = x / (torch.norm(x, dim=1, keepdim=True) + 1e-8)
+        y_norm = y / (torch.norm(y, dim=1, keepdim=True) + 1e-8)
 
+        if n == 1 and m == 1:
+            D = torch.norm(x_norm - y_norm, p=2).unsqueeze(0).unsqueeze(0)
+        elif n == 1:
+            D = torch.norm(x_norm.unsqueeze(0) - y_norm, p=2, dim=1).unsqueeze(0)
+        elif m == 1:
+            D = torch.norm(x_norm - y_norm.unsqueeze(0), p=2, dim=1).unsqueeze(1)
+        else:
+            D = torch.cdist(x_norm, y_norm, p=2)
 
-def set_seed(seed=42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True)
+        D = D / (D.max() + 1e-8)
 
+        R = torch.zeros(n+1, m+1, device=x.device) + float('inf')
+        R[0, 0] = 0
 
-set_seed(42)
+        for i in range(1, n+1):
+            for j in range(1, m+1):
+                cost = D[i-1, j-1]
+                min_val = torch.min(torch.min(R[i-1, j], R[i, j-1]), R[i-1, j-1])
+                R[i, j] = cost + min_val
 
+        return torch.abs(R[-1, -1])
+
+    def autocorr(self, z):
+        """计算序列的自相关函数（ACF）"""
+        z_centered = z - torch.mean(z, dim=0)
+        acf = torch.stack([
+            torch.sum(z_centered[:-lag] * z_centered[lag:], dim=0)
+            for lag in range(1, 6)
+        ])
+        return acf / torch.max(torch.abs(acf), dim=0)[0]
+
+    def forward(self, x_i, x_j, z_i, z_j):
+        """计算两个序列对的Wasserstein传输成本"""
+        is_same_sample = torch.all(x_i == x_j) and torch.all(z_i == z_j)
+        if is_same_sample:
+            return torch.tensor(0.0, device=x_i.device)
+
+        d_time = self.soft_dtw(x_i, x_j)
+        d_latent = torch.norm(z_i - z_j, p=2) / z_i.shape[0]
+        acf_i = self.autocorr(z_i)
+        acf_j = self.autocorr(z_j)
+        d_acf = torch.norm(acf_i - acf_j, p=1)
+
+        return (self.w[0] * d_time +
+                self.w[1] * d_latent +
+                self.w[2] * d_acf)
+
+def sinkhorn_cost(X, Z, cost_fn, epsilon=0.1, n_iters=50):
+    """Sinkhorn 算法计算 Wasserstein 距离"""
+    batch_size = X.shape[0]
+    device = X.device
+
+    def log_sum_exp(x, axis=-1):
+        max_x = torch.max(x, axis=axis, keepdim=True)[0]
+        return max_x + torch.log(torch.sum(
+            torch.exp(x - max_x), axis=axis, keepdim=True)+1e-8)
+
+    C = torch.zeros(batch_size, batch_size, device=device)
+    for i in range(batch_size):
+        for j in range(batch_size):
+            C[i, j] = cost_fn(X[i], X[j], Z[i], Z[j])
+
+    u = torch.zeros(batch_size, device=device)
+    v = torch.zeros(batch_size, device=device)
+
+    K = torch.exp(-C / epsilon)
+    for _ in range(n_iters):
+        u = epsilon * (torch.log((torch.ones(batch_size, device=device) / batch_size)+1e-8) -
+                      torch.log((torch.sum(K * v.exp().unsqueeze(0), dim=1)))+1e-8)
+        v = epsilon * (torch.log((torch.ones(batch_size, device=device) / batch_size)+1e-8) -
+                      torch.log((torch.sum(K * u.exp().unsqueeze(1), dim=0)))+1e-8)
+
+    P = torch.exp((u.unsqueeze(1) + v.unsqueeze(0) - C) / epsilon)
+    W = torch.sum(P * C)
+
+    return W
 
 class Solver(object):
     def __init__(self, config=None, train_loader=None, val_loader=None, test_loader=None, device=None, modal=None):
@@ -76,7 +139,7 @@ class Solver(object):
         if self.config.type == 'base':
             self.model = SL_module(input_dim=1024, depth=5, heads=8, mlp_dim=3072, dropout_ratio=0.5)
         elif self.config.type == 'ib':
-            self.model = SL_module_VIB(input_dim=1024, depth=5, heads=8, mlp_dim=3072, dropout_ratio=0.5)
+            self.model = SL_module_VIBPRE_SWD(input_dim=1024, depth=5, heads=8, mlp_dim=3072, dropout_ratio=0.5)
         self.model.to(cuda_device)
         # self.optimizer = optim.SGD(self.model.parameters(), lr=self.config.lr, momentum=0.9, weight_decay=self.config.l2_reg)
         # self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.1)
@@ -95,6 +158,7 @@ class Solver(object):
         # 为变分参数使用更小的学习率（原始学习率的1/10）
         ib_lr = self.config.lr
         print(f"使用学习率: 一般参数 {self.config.lr}, VIB参数 {ib_lr}")
+
 
         self.optimizer = optim.SGD([
             {'params': ib_params, 'lr': ib_lr, 'weight_decay': self.config.l2_reg},  # 变分参数
@@ -588,18 +652,18 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='SL_module', help='the name of the model')
     parser.add_argument('--epochs', type=int, default=2, help='the number of training epochs')
-    parser.add_argument('--lr', type=float, default=5e-3, help='the learning rate')
+    parser.add_argument('--lr', type=float, default=0.05, help='the learning rate')
     parser.add_argument('--l2_reg', type=float, default=5e-5, help='l2 regularizer')
     parser.add_argument('--dropout_ratio', type=float, default=0.5, help='the dropout ratio')
-    parser.add_argument('--batch_size', type=int, default=128, help='the batch size')
-    parser.add_argument('--tag', type=str, default='visual_VIB', help='A tag for experiments')
+    parser.add_argument('--batch_size', type=int, default=64, help='the batch size')
+    parser.add_argument('--tag', type=str, default='test', help='A tag for experiments')
     parser.add_argument('--ckpt_path', type=str, default=None,
                         help='checkpoint path for inference or weight initialization')
     parser.add_argument('--train', type=str2bool, default='true', help='when use Train')
     parser.add_argument('--path', type=str, default='dataset/mr_hisum_split.json', help='path')
-    parser.add_argument('--device', type=str, default='0', help='gpu')
+    parser.add_argument('--device', type=str, default='4', help='gpu')
     parser.add_argument('--modal', type=str, default='visual', help='visual,audio,multi')
-    parser.add_argument('--beta', type=float, default=0, help='beta')
+    parser.add_argument('--beta', type=float, default=0.0001, help='beta')
     parser.add_argument('--type', type=str, default='ib', help='base,ib,cib,eib,lib')  # cib,eib,lib
 
     opt = parser.parse_args()

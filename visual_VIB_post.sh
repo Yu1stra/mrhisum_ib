@@ -13,7 +13,7 @@
 # parser.add_argument('--modal', type=str, default='visual', help='visual,audio,multi')
 # parser.add_argument('--beta', type=float, default=0, help='beta')
 # parser.add_argument('--type',type = str, default='base', help='base,ib,cib,eib,lib')#cib,eib,lib
-time_tag="07091624" #date
+time_tag="06290050" #date
 type="ib" #'base,ib,cib,eib,lib'
 #1e-06
 # 定義所有 dataset 路徑
@@ -55,16 +55,16 @@ test_datasets=(
 )
 beta_list=(
 # "0"
-"1e-10"
+# "1e-10"
 "1e-09"
 "1e-08"
- "1e-07"
- "1e-06"
- "1e-05"
- "1e-04"
- "1e-03"
- "1e-02"
- "1e-01"
+"1e-07"
+"1e-06"
+"1e-05"
+"1e-04"
+"1e-03"
+"1e-02"
+"1e-01"
  "10"
  "1"
 # "0"
@@ -81,9 +81,11 @@ do
         cate=$(basename "${path}" | sed -E 's/_split\.json$//;s/[ &()]/_/g')
         
         echo "Processing dataset: ${path} (Category: ${cate})"
-        python main_audio_VIB.py --train True --model SL_module --batch_size 64 --modal audio --device 5 --type ${type} --beta ${value} --epochs ${i} --tag audio_VIB_${cate}_${type}_ep${i}_${time_tag} --path ${path}
+        python main_visual_VIB_postib.py --train True --model SL_module --batch_size 128 --modal visual --device 3 --type ${type} --beta ${value} --epochs ${i} --tag visualVIBpost_VIB_${cate}_${type}_ep${i}_${time_tag} --path ${path}
     done
 done
 
 
 echo "所有指令執行完畢。"
+#python main_visual_VIB.py --train True --model SL_module --batch_size 128 --modal visual --device 0 --type ib --beta 0 --epochs 150 --tag visual_VIB_mr_ib_ep_150_03120915 --path "dataset/mr_hisum_split.json"
+#fuser -v /dev/nvidia* | awk '{for(i=1; i<=NF; i++) if($i ~ /^[0-9]+$/) print $i}' | xargs -I{} kill -9 {} 
