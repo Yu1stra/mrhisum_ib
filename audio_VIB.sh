@@ -13,7 +13,7 @@
 # parser.add_argument('--modal', type=str, default='visual', help='visual,audio,multi')
 # parser.add_argument('--beta', type=float, default=0, help='beta')
 # parser.add_argument('--type',type = str, default='base', help='base,ib,cib,eib,lib')#cib,eib,lib
-time_tag="03120915" #date
+time_tag="07091624" #date
 type="ib" #'base,ib,cib,eib,lib'
 #1e-06
 # 定義所有 dataset 路徑
@@ -58,20 +58,20 @@ beta_list=(
 "1e-10"
 "1e-09"
 "1e-08"
-# "1e-07"
-# "1e-06"
-# "1e-05"
-# "1e-04"
-# "1e-03"
-# "1e-02"
-# "1e-01"
-# "10"
-# "1"
- "0"
+ "1e-07"
+ "1e-06"
+ "1e-05"
+ "1e-04"
+ "1e-03"
+ "1e-02"
+ "1e-01"
+ "10"
+ "1"
+# "0"
 # "1e-01"
 )
 # 第一個指令
-i=100
+i=150
 echo "Running for ${type}, epochs: ${i}"
 for value in "${beta_list[@]}"
 do
@@ -81,7 +81,7 @@ do
         cate=$(basename "${path}" | sed -E 's/_split\.json$//;s/[ &()]/_/g')
         
         echo "Processing dataset: ${path} (Category: ${cate})"
-        python main_audio_VIB.py --train True --model SL_module --batch_size 128 --modal audio --device 1 --type ${type} --beta ${value} --epochs ${i} --tag audio_VIB_${cate}_${type}_ep${i}_${time_tag} --path ${path}
+        python main_audio_VIB.py --train True --model SL_module --batch_size 64 --modal audio --device 5 --type ${type} --beta ${value} --epochs ${i} --tag audio_VIB_${cate}_${type}_ep${i}_${time_tag} --path ${path}
     done
 done
 
