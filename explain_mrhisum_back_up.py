@@ -1,3 +1,5 @@
+import os
+
 import torch
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -49,7 +51,7 @@ def compute_psmi_memory_efficient(samples_to_eval, summary_features_cpu, all_fea
     psmi_scores = torch.mean(log_prob_z_given_y - log_prob_z, dim=1)
     return psmi_scores
 
-def generate_psmi_temporal_scores(model_features, summary_features, all_features, n_projections=100, feature_type='fused'):
+def generate_psmi_temporal_scores(model_features, summary_features, all_features, n_projections=10000, feature_type='fused'):
     """
     計算基於模型特徵的PSMI分數
     
@@ -100,7 +102,7 @@ if __name__ == "__main__":
     import argparse
     from model.mrhisum_dataset_fixed import MrHiSumDataset
 
-    for beta in [0]:
+    for beta in [ 1, 2, 3, 4, 5, 6]:
         number_list=["0","0.1","0.01","0.001","0.0001","1e-05","1e-06"]
         parser = argparse.ArgumentParser(description="Compare Ground Truth, PSMI, and Model Predictions.")
         parser.add_argument('--split_file', type=str, default='dataset/mr_hisum_split.json')
@@ -134,12 +136,14 @@ if __name__ == "__main__":
 
         # 2. Load Pre-trained Model
         model = SL_module_CIB(visual_input_dim=1024, audio_input_dim=128, depth=5, heads=8, mlp_dim=3072, dropout_ratio=0.5, visual_bottleneck_dim=256, audio_bottleneck_dim=32)
-
-        model.load_state_dict(torch.load(f'/home/jay/MR.HiSum/Summaries/IB/SL_module/multi0423/base/mr/0.0/mr_hisum_base_ep200_trans_ib_03282100/best_mAP50_model/Proportion_100%_best_map50_epoch150.pkl', map_location='cpu'))
-        print(f"Loading model from: /home/jay/MR.HiSum/Summaries/IB/SL_module/multi0423/base/mr/0.0/mr_hisum_base_ep200_trans_ib_03282100/best_mAP50_model/Proportion_100%_best_map50_epoch150.pkl")
-        # except:
-        #     model.load_state_dict(torch.load(f'/home/jay/MR.HiSum/Summaries/IB/SL_module/multi0423/cib/mr/{number_list[beta]}/mr_hisum_cib_ep200_03261018/best_mAP50_model/Proportion_100%_best_map50_epoch50.pkl', map_location='cpu'))
-        #     print(f"Loading model from: /home/jay/MR.HiSum/Summaries/IB/SL_module/multi0423/cib/mr/{number_list[beta]}/mr_hisum_cib_ep200_03261018/best_mAP50_model/Proportion_100%_best_map50_epoch50.pkl")
+        try:
+            model.load_state_dict(torch.load(f'/home/jay/MR.HiSum/Summaries/IB/SL_module/multi0423/cib/mr/{number_list[beta]}/mr_hisum_cib_ep200_03261018/best_mAP50_model/Proportion_100%_best_map50_epoch100.pkl', map_location='cpu'))
+            print(f"Loading model from: /home/jay/MR.HiSum/Summaries/IB/SL_module/multi0423/cib/mr/{number_list[beta]}/mr_hisum_cib_ep200_03261018/best_mAP50_model/Proportion_100%_best_map50_epoch100.pkl")
+            # model.load_state_dict(torch.load(f'/home/jay/MR.HiSum/Summaries/IB/SL_module/multi0423/base/mr/0.0/mr_hisum_base_ep200_trans_ib_03282100/best_mAP50_model/Proportion_100%_best_map50_epoch150.pkl', map_location='cpu'))
+            # print(f"Loading model from: /home/jay/MR.HiSum/Summaries/IB/SL_module/multi0423/base/mr/0.0/mr_hisum_base_ep200_trans_ib_03282100/best_mAP50_model/Proportion_100%_best_map50_epoch150.pkl")
+        except:
+            model.load_state_dict(torch.load(f'/home/jay/MR.HiSum/Summaries/IB/SL_module/multi0423/cib/mr/{number_list[beta]}/mr_hisum_cib_ep200_03261018/best_mAP50_model/Proportion_100%_best_map50_epoch50.pkl', map_location='cpu'))
+            print(f"Loading model from: /home/jay/MR.HiSum/Summaries/IB/SL_module/multi0423/cib/mr/{number_list[beta]}/mr_hisum_cib_ep200_03261018/best_mAP50_model/Proportion_100%_best_map50_epoch50.pkl")
         model.to(DEVICE)
         model.eval()
 
@@ -247,7 +251,7 @@ if __name__ == "__main__":
 
         # Plot 1: Ground Truth
         ax1.plot(video_gtscore_np, label='Ground Truth', color='green')
-        ax1.set_ylim(0, 1)
+        # ax1.set_ylim(0, 1)
         ax1.set_title(f'Ground Truth Scores for Video: {video_name}')
         ax1.set_ylabel('GT Score')
         ax1.legend()
@@ -255,7 +259,7 @@ if __name__ == "__main__":
 
         # Plot 2: PSMI Score
         ax2.plot(psmi_scores_np, label='PSMI Score', color='purple')
-        ax2.set_ylim(0, 0.25)
+        # ax2.set_ylim(0, 0.25)
         ax2.set_title('PSMI Explanation (Data-based)')
         ax2.set_ylabel('PSMI Score')
         ax2.legend()
@@ -263,7 +267,7 @@ if __name__ == "__main__":
 
         # Plot 3: Visual Features PSMI
         ax3.plot(psmi_visual_np, label='Visual Features PSMI', color='blue')
-        ax3.set_ylim(0, 0.06)
+        # ax3.set_ylim(0, 0.06)
         ax3.set_title('PSMI based on Visual Features')
         ax3.set_ylabel('PSMI Score')
         ax3.legend()
@@ -271,7 +275,7 @@ if __name__ == "__main__":
 
         # Plot 4: Audio Features PSMI
         ax4.plot(psmi_audio_np, label='Audio Features PSMI', color='red')
-        ax4.set_ylim(0, 0.05)
+        # ax4.set_ylim(0, 0.05)
         ax4.set_title('PSMI based on Audio Features')
         ax4.set_ylabel('PSMI Score')
         ax4.legend()
@@ -279,7 +283,7 @@ if __name__ == "__main__":
 
         # Plot 5: Fused Features PSMI and Model Prediction
         ax5.plot(psmi_fused_np, label='Fused Features PSMI', color='purple')
-        ax5.set_ylim(0, 0.25)
+        # ax5.set_ylim(0, 0.25)
         ax5.set_title('Fused Features PSMI vs Model Prediction')
         ax5.set_xlabel('Frame Index')
         ax5.set_ylabel('Score')
@@ -287,7 +291,7 @@ if __name__ == "__main__":
         ax5.grid(True, linestyle='--', alpha=0.6)
 
         ax6.plot(model_scores_np, label='Model Prediction', color='orange')
-        ax6.set_ylim(0, 0.6)
+        # ax6.set_ylim(0, 0.6)
         ax6.set_title('Model Prediction')
         ax6.set_xlabel('Frame Index')
         ax6.set_ylabel('Score')
@@ -303,7 +307,10 @@ if __name__ == "__main__":
             ax6.set_ylim(args.y_min, args.y_max)
 
         plt.tight_layout()
-        output_filename = f'./psmi_image/nondy_x_y/multi_cib_10x{str(beta)}_video_psmi_comparison_{video_name}.png'
+        folder_path= f'./psmi_image/dynamic_x_y(project10000)/'
+        if not os.path.exists(folder_path):
+            os.mkdir(folder_path)
+        output_filename = f'{folder_path}multi_cib_10x{str(beta)}_video_psmi_comparison_{video_name}.png'
         plt.savefig(output_filename)
         print(f"\nComparison visualization saved to '{output_filename}'")
 
